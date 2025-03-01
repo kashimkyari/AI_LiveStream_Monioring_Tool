@@ -1,0 +1,9 @@
+Flask
+Flask-SQLAlchemy
+requests
+opencv-python
+torch
+torchvision
+spacy
+beautifulsoup4
+pytesseract
