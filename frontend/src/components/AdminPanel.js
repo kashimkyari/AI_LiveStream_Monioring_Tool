@@ -93,94 +93,28 @@ const AdminPanel = ({ activeTab }) => {
     }
   };
 
-  // When the page loads, start object detection automatically
-document.addEventListener("DOMContentLoaded", function() {
-    console.log("Admin Panel Loaded. Starting object detection...");
-    startObjectDetection();
-    // Other initialization code can go here if needed.
-});
-
-// Function to start object detection via Server-Sent Events (SSE)
-function startObjectDetection() {
-    // Create a new EventSource to connect to the backend detection events endpoint
-    const eventSource = new EventSource("http://localhost:5000/api/detection-events", {
-  withCredentials: true // Include if CORS requires credentials
-});
-
-    // Listen for messages (i.e., detection events) from the server
-    eventSource.onmessage = function(event) {
-        try {
-            const detectionData = JSON.parse(event.data);
-            console.log("Detection data received:", detectionData);
-            updateDetectionUI(detectionData);
-        } catch (error) {
-            console.error("Error parsing detection data:", error);
-        }
-    };
-
-    // Handle errors on the SSE connection and attempt reconnection
-    eventSource.onerror = function(error) {
-        console.error("EventSource failed:", err);
-        eventSource.close();
-        // Attempt to reconnect after a delay (5 seconds)
-        setTimeout(startObjectDetection, 5000);
-    };
-}
-
-// Function to update the admin panel UI with detection data
-function updateDetectionUI(data) {
-    // Ensure there is a container element with id "detectionResults"
-    const resultsContainer = document.getElementById("detectionResults");
-    if (!resultsContainer) {
-        console.warn("Detection results container not found.");
-        return;
-    }
-    
-    // Clear previous content
-    resultsContainer.innerHTML = "";
-
-    // Optionally display the stream URL if provided
-    if (data.stream_url) {
-        const header = document.createElement("h3");
-        header.textContent = `Stream URL: ${data.stream_url}`;
-        resultsContainer.appendChild(header);
-    }
-    
-    // Check if detection data contains any detections
-    if (!data || !data.detections || data.detections.length === 0) {
-        resultsContainer.innerHTML = "<p>No detections at this time.</p>";
-        return;
-    }
-
-    // Create a list element to display each detection
-    const ul = document.createElement("ul");
-    data.detections.forEach(detection => {
-        const li = document.createElement("li");
-        li.textContent = `Class: ${detection.class}, Confidence: ${detection.confidence.toFixed(2)}`;
-        ul.appendChild(li);
-    });
-    
-    resultsContainer.appendChild(ul);
-}
-
   // Real-time detection handler
   useEffect(() => {
     const eventSource = new EventSource('/api/detection-events');
     
     eventSource.onmessage = (e) => {
       const data = JSON.parse(e.data);
-      setDetectionAlerts(prev => ({
-        ...prev,
-        [data.stream_url]: data.detections
-      }));
+      if (!data.error) {
+        setDetectionAlerts(prev => ({
+          ...prev,
+          [data.stream_url]: data.detections
+        }));
 
-      // Show browser notification
-      if (data.detections.length > 0 && Date.now() - lastNotification > 60000) {
-        const detectedItems = data.detections.map(d => d.class).join(', ');
-        new Notification('Object Detected', {
-          body: `Detected ${detectedItems} in ${data.stream_url}`
-        });
-        setLastNotification(Date.now());
+        // Show browser notification
+        if (data.detections?.length > 0 && Date.now() - lastNotification > 60000) {
+          const detectedItems = data.detections.map(d => d.class).join(', ');
+          if (Notification.permission === 'granted') {
+            new Notification('Object Detected', {
+              body: `Detected ${detectedItems} in ${data.stream_url}`
+            });
+            setLastNotification(Date.now());
+          }
+        }
       }
     };
 
@@ -421,6 +355,11 @@ function updateDetectionUI(data) {
                     thumbnail={true}
                     alerts={detectionAlerts[stream.room_url] || []}
                   />
+                  {(detectionAlerts[stream.room_url]?.length > 0) && (
+                    <div className="detection-alert-badge">
+                      {detectionAlerts[stream.room_url].length} DETECTIONS
+                    </div>
+                  )}
                   <div className="assignment-details">
                     <p><strong>Stream:</strong> {stream.id}</p>
                     <p><strong>Agent:</strong> {stream.agent?.username || 'Unassigned'}</p>
@@ -834,6 +773,7 @@ function updateDetectionUI(data) {
           transition: all 0.3s ease;
           border: 1px solid #3d3d3d;
           cursor: pointer;
+          position: relative;
         }
 
         .assignment-card:hover {
@@ -845,6 +785,26 @@ function updateDetectionUI(data) {
         .assignment-details {
           padding: 15px;
           background: #252525;
+        }
+
+        .detection-alert-badge {
+          position: absolute;
+          top: 10px;
+          right: 10px;
+          background: #ff4444;
+          color: white;
+          padding: 5px 10px;
+          border-radius: 15px;
+          font-size: 0.8rem;
+          font-weight: bold;
+          animation: pulse 1s infinite;
+          z-index: 2;
+        }
+
+        @keyframes pulse {
+          0% { transform: scale(1); }
+          50% { transform: scale(1.05); }
+          100% { transform: scale(1); }
         }
 
         .flag-section {
