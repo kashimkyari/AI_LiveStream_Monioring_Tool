@@ -12,7 +12,15 @@ const AdminPanel = ({ activeTab }) => {
   const [selectedAgentId, setSelectedAgentId] = useState('');
   const [selectedStreamId, setSelectedStreamId] = useState('');
   const [agents, setAgents] = useState([]);
-  const [newAgent, setNewAgent] = useState({ username: '', password: '' });
+  const [newAgent, setNewAgent] = useState({ 
+    username: '', 
+    password: '',
+    firstname: '',
+    lastname: '',
+    email: '',
+    phonenumber: '',
+    staffid: ''
+  });
   const [agentMsg, setAgentMsg] = useState('');
   const [agentError, setAgentError] = useState('');
   const [streams, setStreams] = useState([]);
@@ -29,6 +37,7 @@ const AdminPanel = ({ activeTab }) => {
   const [objectError, setObjectError] = useState('');
   const [detectionAlerts, setDetectionAlerts] = useState({});
   const [lastNotification, setLastNotification] = useState(0);
+  const [showAgentModal, setShowAgentModal] = useState(false);
 
   // Data fetching functions
   const fetchDashboard = async () => {
@@ -83,6 +92,76 @@ const AdminPanel = ({ activeTab }) => {
       console.error('Error fetching objects:', error);
     }
   };
+
+  // When the page loads, start object detection automatically
+document.addEventListener("DOMContentLoaded", function() {
+    console.log("Admin Panel Loaded. Starting object detection...");
+    startObjectDetection();
+    // Other initialization code can go here if needed.
+});
+
+// Function to start object detection via Server-Sent Events (SSE)
+function startObjectDetection() {
+    // Create a new EventSource to connect to the backend detection events endpoint
+    const eventSource = new EventSource("http://localhost:5000/api/detection-events", {
+  withCredentials: true // Include if CORS requires credentials
+});
+
+    // Listen for messages (i.e., detection events) from the server
+    eventSource.onmessage = function(event) {
+        try {
+            const detectionData = JSON.parse(event.data);
+            console.log("Detection data received:", detectionData);
+            updateDetectionUI(detectionData);
+        } catch (error) {
+            console.error("Error parsing detection data:", error);
+        }
+    };
+
+    // Handle errors on the SSE connection and attempt reconnection
+    eventSource.onerror = function(error) {
+        console.error("EventSource failed:", err);
+        eventSource.close();
+        // Attempt to reconnect after a delay (5 seconds)
+        setTimeout(startObjectDetection, 5000);
+    };
+}
+
+// Function to update the admin panel UI with detection data
+function updateDetectionUI(data) {
+    // Ensure there is a container element with id "detectionResults"
+    const resultsContainer = document.getElementById("detectionResults");
+    if (!resultsContainer) {
+        console.warn("Detection results container not found.");
+        return;
+    }
+    
+    // Clear previous content
+    resultsContainer.innerHTML = "";
+
+    // Optionally display the stream URL if provided
+    if (data.stream_url) {
+        const header = document.createElement("h3");
+        header.textContent = `Stream URL: ${data.stream_url}`;
+        resultsContainer.appendChild(header);
+    }
+    
+    // Check if detection data contains any detections
+    if (!data || !data.detections || data.detections.length === 0) {
+        resultsContainer.innerHTML = "<p>No detections at this time.</p>";
+        return;
+    }
+
+    // Create a list element to display each detection
+    const ul = document.createElement("ul");
+    data.detections.forEach(detection => {
+        const li = document.createElement("li");
+        li.textContent = `Class: ${detection.class}, Confidence: ${detection.confidence.toFixed(2)}`;
+        ul.appendChild(li);
+    });
+    
+    resultsContainer.appendChild(ul);
+}
 
   // Real-time detection handler
   useEffect(() => {
@@ -141,15 +220,28 @@ const AdminPanel = ({ activeTab }) => {
   const handleCreateAgent = async () => {
     setAgentError('');
     setAgentMsg('');
-    if (!newAgent.username.trim() || !newAgent.password.trim()) {
-      setAgentError('Username and password are required.');
+    const requiredFields = ['username', 'password', 'firstname', 'lastname', 'email', 'phonenumber'];
+    const missingFields = requiredFields.filter(field => !newAgent[field].trim());
+    
+    if (missingFields.length > 0) {
+      setAgentError(`Missing required fields: ${missingFields.join(', ')}`);
       return;
     }
+    
     try {
       const res = await axios.post('/api/agents', newAgent);
       setAgentMsg(res.data.message);
-      setNewAgent({ username: '', password: '' });
+      setNewAgent({ 
+        username: '', 
+        password: '',
+        firstname: '',
+        lastname: '',
+        email: '',
+        phonenumber: '',
+        staffid: ''
+      });
       fetchAgents();
+      setShowAgentModal(false);
     } catch (error) {
       setAgentError(error.response?.data.message || 'Error creating agent.');
     }
@@ -365,28 +457,22 @@ const AdminPanel = ({ activeTab }) => {
       {activeTab === 'agents' && (
         <div className="tab-content">
           <h3>Manage Agents</h3>
-          <div className="form-container">
-            <input
-              type="text"
-              placeholder="New Agent Username"
-              value={newAgent.username}
-              onChange={(e) => setNewAgent({ ...newAgent, username: e.target.value })}
-            />
-            <input
-              type="password"
-              placeholder="New Agent Password"
-              value={newAgent.password}
-              onChange={(e) => setNewAgent({ ...newAgent, password: e.target.value })}
-            />
-            <button onClick={handleCreateAgent}>Create Agent</button>
-          </div>
-          {agentError && <div className="error">{agentError}</div>}
-          {agentMsg && <div className="message">{agentMsg}</div>}
+          <button 
+            className="create-agent-btn"
+            onClick={() => setShowAgentModal(true)}
+          >
+            Create/Add Agent
+          </button>
           <table>
             <thead>
               <tr>
                 <th>ID</th>
+                <th>First Name</th>
+                <th>Last Name</th>
                 <th>Username</th>
+                <th>Email</th>
+                <th>Phone</th>
+                <th>Staff ID</th>
                 <th>Actions</th>
               </tr>
             </thead>
@@ -394,7 +480,12 @@ const AdminPanel = ({ activeTab }) => {
               {agents.map((agent) => (
                 <tr key={agent.id}>
                   <td>{agent.id}</td>
+                  <td>{agent.firstname}</td>
+                  <td>{agent.lastname}</td>
                   <td>{agent.username}</td>
+                  <td>{agent.email}</td>
+                  <td>{agent.phonenumber}</td>
+                  <td>{agent.staffid || '-'}</td>
                   <td>
                     <button onClick={() => handleEditAgentName(agent.id, agent.username)}>Edit Name</button>
                     <button onClick={() => handleEditAgentPassword(agent.id)}>Edit Password</button>
@@ -560,6 +651,62 @@ const AdminPanel = ({ activeTab }) => {
               streamer_username={selectedAssignment.streamer_username}
               alerts={detectionAlerts[selectedAssignment.room_url] || []}
             />
+          </div>
+        </div>
+      )}
+
+      {showAgentModal && (
+        <div className="modal-overlay" onClick={() => setShowAgentModal(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <button className="close-button" onClick={() => setShowAgentModal(false)}>X</button>
+            <h3>Create New Agent</h3>
+            <div className="form-container">
+              <input
+                type="text"
+                placeholder="First Name *"
+                value={newAgent.firstname}
+                onChange={(e) => setNewAgent({ ...newAgent, firstname: e.target.value })}
+              />
+              <input
+                type="text"
+                placeholder="Last Name *"
+                value={newAgent.lastname}
+                onChange={(e) => setNewAgent({ ...newAgent, lastname: e.target.value })}
+              />
+              <input
+                type="text"
+                placeholder="Username *"
+                value={newAgent.username}
+                onChange={(e) => setNewAgent({ ...newAgent, username: e.target.value })}
+              />
+              <input
+                type="email"
+                placeholder="Email *"
+                value={newAgent.email}
+                onChange={(e) => setNewAgent({ ...newAgent, email: e.target.value })}
+              />
+              <input
+                type="tel"
+                placeholder="Phone Number *"
+                value={newAgent.phonenumber}
+                onChange={(e) => setNewAgent({ ...newAgent, phonenumber: e.target.value })}
+              />
+              <input
+                type="password"
+                placeholder="Password *"
+                value={newAgent.password}
+                onChange={(e) => setNewAgent({ ...newAgent, password: e.target.value })}
+              />
+              <input
+                type="text"
+                placeholder="Staff ID (Optional)"
+                value={newAgent.staffid}
+                onChange={(e) => setNewAgent({ ...newAgent, staffid: e.target.value })}
+              />
+              <button onClick={handleCreateAgent}>Create Agent</button>
+            </div>
+            {agentError && <div className="error">{agentError}</div>}
+            {agentMsg && <div className="message">{agentMsg}</div>}
           </div>
         </div>
       )}
@@ -779,6 +926,37 @@ const AdminPanel = ({ activeTab }) => {
           0%, 100% { transform: translateX(0); }
           25% { transform: translateX(-8px); }
           75% { transform: translateX(8px); }
+        }
+
+        .create-agent-btn {
+          margin-bottom: 20px;
+          padding: 12px 24px;
+          background: linear-gradient(135deg, #28a745, #1e7e34);
+          color: white;
+          border: none;
+          border-radius: 8px;
+          cursor: pointer;
+          transition: all 0.3s ease;
+        }
+
+        .create-agent-btn:hover {
+          transform: translateY(-2px);
+          box-shadow: 0 5px 15px rgba(40,167,69,0.3);
+        }
+
+        .modal-content h3 {
+          margin-top: 0;
+          margin-bottom: 20px;
+          color: #e0e0e0;
+        }
+
+        .modal-content .form-container {
+          flex-direction: column;
+        }
+
+        .modal-content .form-container input {
+          width: 100%;
+          margin-bottom: 10px;
         }
 
         @media (max-width: 768px) {

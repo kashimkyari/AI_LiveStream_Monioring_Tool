@@ -3,27 +3,173 @@ import sys
 import json
 import threading
 import time
-from flask import Flask, request, jsonify, session
-from flask_cors import CORS
-from urllib.parse import urlparse
-from models_db import db, User, Stream, Log, Assignment, ChatKeyword, FlaggedObject
-from notifications import send_notification
-from detection import visual, audio, chat
-from functools import wraps
-from datetime import timedelta
-import requests
-from bs4 import BeautifulSoup
-from werkzeug.utils import secure_filename
+import random
+import spacy
 import cv2
-import base64
+import torch
 import numpy as np
+import psycopg2
+from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
+from flask import Flask, request, jsonify, session, current_app
+from flask_cors import CORS
+from flask_sqlalchemy import SQLAlchemy
+from functools import wraps
+from datetime import datetime, timedelta
+from urllib.parse import urlparse
+from werkzeug.utils import secure_filename
+from bs4 import BeautifulSoup
+import requests
 from io import BytesIO
 from PIL import Image
 import pytesseract
+from notifications import send_notification
+
+# -------------------------------
+# Database Existence Check
+# -------------------------------
+def ensure_database():
+    DB_HOST = os.getenv("DB_HOST", "localhost")
+    DB_PORT = os.getenv("DB_PORT", "5432")
+    DB_USER = os.getenv("DB_USER", "postgres")
+    DB_PASSWORD = os.getenv("DB_PASSWORD", "password")
+    NEW_DB_NAME = os.getenv("NEW_DB_NAME", "stream_monitor")
+    try:
+        # Connect to default database "postgres"
+        conn = psycopg2.connect(dbname="postgres", user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT)
+        conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+        cur = conn.cursor()
+        cur.execute("SELECT 1 FROM pg_database WHERE datname=%s", (NEW_DB_NAME,))
+        exists = cur.fetchone() is not None
+        cur.close()
+        conn.close()
+        if not exists:
+            # Create the database if it doesn't exist
+            conn = psycopg2.connect(dbname="postgres", user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT)
+            conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+            cur = conn.cursor()
+            cur.execute(f"CREATE DATABASE {NEW_DB_NAME};")
+            print(f"Database '{NEW_DB_NAME}' created successfully!")
+            cur.close()
+            conn.close()
+        else:
+            print(f"Database '{NEW_DB_NAME}' already exists.")
+    except psycopg2.Error as e:
+        print(f"Error ensuring database: {e}")
+
+# -------------------------------
+# Models (from models_db.py)
+# -------------------------------
+db = SQLAlchemy()
+
+class User(db.Model):
+    __tablename__ = 'users'
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(80), unique=True, nullable=False)
+    email = db.Column(db.String(120), unique=True, nullable=False)
+    firstname = db.Column(db.String(80), nullable=False)
+    lastname = db.Column(db.String(80), nullable=False)
+    phonenumber = db.Column(db.String(20), nullable=False)
+    staffid = db.Column(db.String(20))
+    password = db.Column(db.String(120), nullable=False)
+    role = db.Column(db.String(10), nullable=False, default='agent')
+    assignments = db.relationship('Assignment', back_populates='agent')
+    
+    def serialize(self):
+        return {
+            'id': self.id,
+            'username': self.username,
+            'email': self.email,
+            'firstname': self.firstname,
+            'lastname': self.lastname,
+            'phonenumber': self.phonenumber,
+            'staffid': self.staffid,
+            'role': self.role
+        }
+
+class Stream(db.Model):
+    __tablename__ = 'streams'
+    id = db.Column(db.Integer, primary_key=True)
+    room_url = db.Column(db.String(300), unique=True, nullable=False)
+    platform = db.Column(db.String(50), nullable=False, default='Chaturbate')
+    streamer_username = db.Column(db.String(100))
+    assignments = db.relationship('Assignment', back_populates='stream')
+    
+    def serialize(self):
+        return {
+            'id': self.id,
+            'room_url': self.room_url,
+            'platform': self.platform,
+            'streamer_username': self.streamer_username
+        }
+
+class Assignment(db.Model):
+    __tablename__ = 'assignments'
+    id = db.Column(db.Integer, primary_key=True)
+    agent_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    stream_id = db.Column(db.Integer, db.ForeignKey('streams.id'), nullable=False)
+    agent = db.relationship('User', back_populates='assignments')
+    stream = db.relationship('Stream', back_populates='assignments')
+
+class Log(db.Model):
+    __tablename__ = 'logs'
+    id = db.Column(db.Integer, primary_key=True)
+    timestamp = db.Column(db.DateTime(timezone=True), default=datetime.utcnow)
+    room_url = db.Column(db.String(300))
+    event_type = db.Column(db.String(50))
+    details = db.Column(db.JSON)
+    
+    def serialize(self):
+        return {
+            'id': self.id,
+            'timestamp': self.timestamp.isoformat(),
+            'room_url': self.room_url,
+            'event_type': self.event_type,
+            'details': self.details
+        }
+
+class ChatKeyword(db.Model):
+    __tablename__ = 'chat_keywords'
+    id = db.Column(db.Integer, primary_key=True)
+    keyword = db.Column(db.String(100), unique=True, nullable=False)
+    
+    def serialize(self):
+        return {'id': self.id, 'keyword': self.keyword}
+
+class FlaggedObject(db.Model):
+    __tablename__ = 'flagged_objects'
+    id = db.Column(db.Integer, primary_key=True)
+    object_name = db.Column(db.String(100), unique=True, nullable=False)
+    confidence_threshold = db.Column(db.Numeric(3, 2), default=0.8)
+    
+    def serialize(self):
+        return {
+            'id': self.id,
+            'object_name': self.object_name,
+            'confidence_threshold': float(self.confidence_threshold)
+        }
+
+# -------------------------------
+# App Initialization (Original app.py)
+# -------------------------------
+# Ensure the database exists before initializing the app
+ensure_database()
 
 app = Flask(__name__)
-CORS(app, resources={r"/api/*": {"origins": "*"}})
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///monitor.db'
+CORS(
+    app,
+    resources={r"/api/*": {
+        "origins": "*",
+        "expose_headers": ["Content-Type", "Cache-Control", "X-Requested-With"]
+    }}
+)
+app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql+psycopg2://postgres:password@localhost/stream_monitor'
+app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+    'pool_size': 20,           # Increased pool size
+    'max_overflow': 40,        # Increased overflow limit
+    'pool_timeout': 60,        # Increased timeout (seconds)
+    'pool_recycle': 3600,      # Recycle connections every hour
+    'pool_pre_ping': True
+}
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SECRET_KEY'] = 'supersecretkey'
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=7)
@@ -32,16 +178,116 @@ ALLOWED_EXTENSIONS = {'mp4', 'avi', 'mov'}
 
 db.init_app(app)
 
+# Teardown to remove session and release connections
+@app.teardown_appcontext
+def shutdown_session(exception=None):
+    db.session.remove()
+
 with app.app_context():
     db.create_all()
     if not User.query.filter_by(username='admin').first():
-        admin_user = User(username='admin', password='admin', role='admin')
+        admin_user = User(
+            username='admin',
+            password='admin',
+            email='admin@example.com',
+            firstname='Admin',
+            lastname='User',
+            phonenumber='000-000-0000',
+            role='admin'
+        )
         db.session.add(admin_user)
     if not User.query.filter_by(username='agent').first():
-        agent_user = User(username='agent', password='agent', role='agent')
+        agent_user = User(
+            username='agent',
+            password='agent',
+            email='agent@example.com',
+            firstname='Agent',
+            lastname='User',
+            phonenumber='111-111-1111',
+            role='agent'
+        )
         db.session.add(agent_user)
     db.session.commit()
 
+# -------------------------------
+# Detection Functions Integration
+# -------------------------------
+
+# Audio Detection (from audio.py)
+def detect_audio(stream_url):
+    if random.randint(0, 10) > 8:
+        return "Audio anomaly detected"
+    return None
+
+# Chat Detection (from chat.py)
+nlp = spacy.load("en_core_web_sm")
+matcher = spacy.matcher.Matcher(nlp.vocab)
+
+def refresh_keywords():
+    with app.app_context():
+        keywords = [kw.keyword.lower() for kw in ChatKeyword.query.all()]
+    global matcher
+    matcher = spacy.matcher.Matcher(nlp.vocab)
+    for word in keywords:
+        pattern = [{"LOWER": word}]
+        matcher.add(word, [pattern])
+
+def detect_chat(stream_url):
+    refresh_keywords()
+    sample_message = "Sample chat message containing flagged keywords"
+    doc = nlp(sample_message.lower())
+    matches = matcher(doc)
+    detected = set()
+    if matches:
+        for match_id, start, end in matches:
+            span = doc[start:end]
+            detected.add(span.text)
+    if detected:
+        return {
+            'status': 'flagged',
+            'keywords': list(detected),
+            'message': sample_message
+        }
+    return {'status': 'clean'}
+
+# Visual Detection (from visual.py)
+model = torch.hub.load('ultralytics/yolov5', 'yolov5s', pretrained=True, trust_repo=True)
+flagged_objects = []
+
+def update_flagged_objects():
+    global flagged_objects
+    with app.app_context():
+        objects = FlaggedObject.query.all()
+        flagged_objects = [{
+            'name': obj.object_name.lower(),
+            'threshold': float(obj.confidence_threshold)
+        } for obj in objects]
+
+def detect_frame(frame):
+    results = model(frame)
+    detections = results.xyxy[0]
+    detected = []
+    for *box, conf, cls in detections:
+        class_name = model.names[int(cls)].lower()
+        flagged_obj = next((obj for obj in flagged_objects if obj['name'] == class_name), None)
+        if flagged_obj and conf.item() >= flagged_obj['threshold']:
+            detected.append({
+                'class': class_name,
+                'confidence': conf.item(),
+                'box': [float(x) for x in box],
+                'threshold': flagged_obj['threshold']
+            })
+    return detected
+
+def detect_visual(stream_url):
+    cap = cv2.VideoCapture(stream_url)
+    ret, frame = cap.read()
+    cap.release()
+    return detect_frame(frame) if ret else None
+
+# -------------------------------
+# Helper Functions and Decorators
+# -------------------------------
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
@@ -51,10 +297,9 @@ def login_required(role=None):
         def decorated_function(*args, **kwargs):
             if 'user_id' not in session:
                 return jsonify({'message': 'Authentication required'}), 401
-            if role:
-                user = User.query.get(session['user_id'])
-                if user.role != role:
-                    return jsonify({'message': 'Unauthorized'}), 403
+            user = db.session.get(User, session['user_id'])
+            if role and (user is None or user.role != role):
+                return jsonify({'message': 'Unauthorized'}), 403
             return f(*args, **kwargs)
         return decorated_function
     return decorator
@@ -67,18 +312,19 @@ def update_flagged_keywords():
         flagged_keywords = [kw.keyword for kw in keywords]
 update_flagged_keywords()
 
-# visual.py
-def detect_frame(frame):
-    results = model(frame)
-    # Compares detected objects against flagged list
-    for *box, conf, cls in detections:
-        class_name = model.names[int(cls)].lower()
-        flagged_obj = next((obj for obj in flagged_objects if obj['name'] == class_name), None)
+# -------------------------------
+# Original API Routes (from app.py)
+# -------------------------------
 
 @app.route('/api/login', methods=['POST'])
 def login():
     data = request.get_json()
-    user = User.query.filter_by(username=data.get('username'), password=data.get('password')).first()
+    username = data.get('username')
+    user = User.query.filter(
+        (User.username == username) | 
+        (User.email == username)
+    ).filter_by(password=data.get('password')).first()
+    
     if user:
         session.permanent = True
         session['user_id'] = user.id
@@ -93,7 +339,9 @@ def logout():
 @app.route('/api/session', methods=['GET'])
 def check_session():
     if 'user_id' in session:
-        user = User.query.get(session['user_id'])
+        user = db.session.get(User, session['user_id'])
+        if user is None:
+            return jsonify({'logged_in': False}), 401
         return jsonify({'logged_in': True, 'user': user.serialize()})
     return jsonify({'logged_in': False}), 401
 
@@ -128,12 +376,23 @@ def get_agents():
 @login_required(role='admin')
 def create_agent():
     data = request.get_json()
-    if not (username := data.get('username')) or not (password := data.get('password')):
-        return jsonify({'message': 'Username and password required'}), 400
-    if User.query.filter_by(username=username).first():
-        return jsonify({'message': 'Username exists'}), 400
+    required_fields = ['username', 'password', 'firstname', 'lastname', 'email', 'phonenumber']
+    if any(field not in data for field in required_fields):
+        return jsonify({'message': 'Missing required fields'}), 400
     
-    agent = User(username=username, password=password, role='agent')
+    if User.query.filter((User.username == data['username']) | (User.email == data['email'])).first():
+        return jsonify({'message': 'Username or email exists'}), 400
+    
+    agent = User(
+        username=data['username'],
+        password=data['password'],
+        firstname=data['firstname'],
+        lastname=data['lastname'],
+        email=data['email'],
+        phonenumber=data['phonenumber'],
+        staffid=data.get('staffid'),
+        role='agent'
+    )
     db.session.add(agent)
     db.session.commit()
     return jsonify({'message': 'Agent created', 'agent': agent.serialize()}), 201
@@ -209,9 +468,9 @@ def update_stream(stream_id):
     data = request.get_json()
     if 'room_url' in data and (new_url := data['room_url'].strip()):
         platform = data.get('platform', stream.platform).strip()
-        if platform == 'Chaturbate' and 'chaturbate.com/' not in new_url:
+        if platform.lower() == 'chaturbate' and 'chaturbate.com/' not in new_url:
             return jsonify({'message': 'Invalid Chaturbate URL'}), 400
-        if platform == 'Stripchat' and 'stripchat.com/' not in new_url:
+        if platform.lower() == 'stripchat' and 'stripchat.com/' not in new_url:
             return jsonify({'message': 'Invalid Stripchat URL'}), 400
         
         stream.room_url = new_url
@@ -366,8 +625,7 @@ def test_visual():
     if not ret:
         return jsonify({'message': 'Error reading video'}), 400
     
-    visual.CONF_THRESHOLD = float(request.args.get('threshold', 0.5))
-    results = visual.detect_frame(frame)
+    results = detect_frame(frame)
     return jsonify({'results': results})
 
 @app.route('/api/test/visual/frame', methods=['POST'])
@@ -380,7 +638,7 @@ def test_visual_frame():
     try:
         img = Image.open(file.stream).convert('RGB')
         frame = np.array(img)
-        results = visual.detect_frame(frame)
+        results = detect_frame(frame)
         return jsonify({'results': results})
     except Exception as e:
         return jsonify({'message': f'Processing error: {str(e)}'}), 500
@@ -402,7 +660,7 @@ def stream_visual():
                     continue
                 
                 try:
-                    results = visual.detect_frame(frame)
+                    results = detect_frame(frame)
                     yield "data: " + json.dumps(results) + "\n\n"
                 except Exception as e:
                     yield "data: " + json.dumps({"error": f"Detection error: {str(e)}"}) + "\n\n"
@@ -413,127 +671,13 @@ def stream_visual():
     
     return app.response_class(generate(), mimetype='text/event-stream')
 
-@app.route('/api/scrape', methods=['POST'])
-@login_required()
-def scrape_stream():
-    data = request.get_json()
-    if not (room_url := data.get('room_url', '').strip()):
-        return jsonify({'message': 'Room URL required'}), 400
-    
-    try:
-        res = requests.get(room_url, timeout=10)
-        if res.status_code != 200:
-            return jsonify({'message': 'Invalid response from platform'}), 400
-        
-        soup = BeautifulSoup(res.text, 'html.parser')
-        streamer = room_url.rstrip('/').split('/')[-1]
-        
-        return jsonify({
-            'room_url': room_url,
-            'streamer': streamer,
-            'thumbnail': f'https://jpeg.live.mmcdn.com/stream?room={streamer}&f=0.8399472484345041',
-            'title': soup.title.string if soup.title else ''
-        })
-    except Exception as e:
-        return jsonify({'message': f'Scraping failed: {str(e)}'}), 500
-
-def monitor_stream(stream_url):
-    app_ctx = app.app_context()
-    app_ctx.push()  # Push once at the beginning
-    
-    try:
-        stream = Stream.query.filter_by(room_url=stream_url).first()
-        if not stream:
-            print(f"Stream {stream_url} not found in database")
-            return
-
-        cap = cv2.VideoCapture(stream_url)
-        if not cap.isOpened():
-            print(f"Failed to open video stream: {stream_url}")
-            return
-
-        last_notification = time.time()
-        chat_coords = {
-            'chaturbate': (0.7, 0.1, 0.98, 0.9),  # Right-side chat area
-            'stripchat': (0.65, 0.05, 0.95, 0.85)  # Right-side chat area
-        }
-
-        try:
-            while cap.isOpened():
-                ret, frame = cap.read()
-                if not ret:
-                    print(f"Frame read failed for {stream_url}")
-                    time.sleep(10)
-                    continue
-
-                detections = []
-                try:
-                    # Update detection models from DB
-                    visual.update_flagged_objects()
-                    update_flagged_keywords()
-
-                    # Perform object detection
-                    visual_results = visual.detect_frame(frame)
-                    detections.extend(visual_results)
-
-                    # OCR Chat Monitoring
-                    platform = stream.platform.lower()
-                    if platform in chat_coords:
-                        h, w = frame.shape[:2]
-                        x1, y1, x2, y2 = chat_coords[platform]
-                        
-                        # Extract chat region
-                        chat_roi = frame[
-                            int(y1*h):int(y2*h),
-                            int(x1*w):int(x2*w)
-                        ]
-                        
-                        # Perform OCR detection
-                        _, flagged_keywords = ocr_detect_frame(chat_roi)
-                        for kw in flagged_keywords:
-                            detections.append({
-                                'class': f"CHAT: {kw}",
-                                'confidence': 1.0,
-                                'box': [80, 90, 100, 95]  # Bottom-right position
-                            })
-
-                    # Handle detections
-                    if detections:
-                        log = Log(
-                            room_url=stream_url,
-                            event_type='combined_detection',
-                            details={'detections': detections}
-                        )
-                        db.session.add(log)
-                        
-                        # Throttle notifications
-                        if time.time() - last_notification > 60:
-                            send_notification(
-                                f"Alerts in {stream_url}: {len(detections)} items detected"
-                            )
-                            last_notification = time.time()
-                        
-                        db.session.commit()
-
-                except Exception as e:
-                    print(f"Detection error in {stream_url}: {str(e)}")
-                    db.session.rollback()
-
-                time.sleep(10)  # Processing interval
-
-        finally:
-            cap.release()
-            print(f"Stopped monitoring {stream_url}")
-    finally:
-        app_ctx.pop()  # Ensure we pop the context when done
-
+# -------------------------------
+# Monitoring and Unified Detection
+# -------------------------------
 @app.route('/api/detection-events', methods=['GET'])
 def detection_events():
     def generate():
-        app_ctx = app.app_context()
-        app_ctx.push()  # Push a single application context that lasts for the generator's lifetime
-        
-        try:
+        with app.app_context():  # Use context manager
             while True:
                 try:
                     logs = Log.query.filter(
@@ -541,18 +685,29 @@ def detection_events():
                     ).order_by(Log.timestamp.desc()).limit(10).all()
                     
                     for log in logs:
-                        yield f"data: {json.dumps({'stream_url': log.room_url, 'detections': log.details['detections']})}\n\n"
-
-                    
+                        yield f"data: {json.dumps({'stream_url': log.room_url, 'detections': log.details.get('detections', [])})}\n\n"
                     time.sleep(2)
                 except Exception as e:
                     print(f"SSE Error: {str(e)}")
                     yield f"data: {json.dumps({'error': str(e)})}\n\n"
                     time.sleep(5)
-        finally:
-            app_ctx.pop()  # Ensure we clean up the context when the generator is done
-
     return app.response_class(generate(), mimetype='text/event-stream')
+
+@app.route('/api/detect', methods=['POST'])
+def unified_detect():
+    data = request.get_json()
+    text = data.get('text', '')
+    visual_frame = data.get('visual_frame', None)
+    audio_flag = detect_audio(data.get('stream_url', ''))
+    visual_results = []
+    if visual_frame:
+        visual_results = detect_frame(np.array(visual_frame))
+    chat_results = detect_chat(text)
+    return jsonify({
+        'audio': audio_flag,
+        'chat': chat_results,
+        'visual': visual_results
+    })
 
 def start_monitoring():
     with app.app_context():
@@ -566,6 +721,85 @@ def start_monitoring():
             thread.start()
             print(f"Started monitoring thread for {stream.room_url}")
 
+def monitor_stream(stream_url):
+    app_ctx = app.app_context()
+    app_ctx.push()
+    try:
+        stream = Stream.query.filter_by(room_url=stream_url).first()
+        if not stream:
+            print(f"Stream {stream_url} not found in database")
+            return
+
+        cap = cv2.VideoCapture(stream_url)
+        if not cap.isOpened():
+            print(f"Failed to open video stream: {stream_url}")
+            return
+
+        last_notification = time.time()
+        chat_coords = {
+            'chaturbate': (0.7, 0.1, 0.98, 0.9),
+            'stripchat': (0.65, 0.05, 0.95, 0.85)
+        }
+
+        try:
+            while cap.isOpened():
+                ret, frame = cap.read()
+                if not ret:
+                    print(f"Frame read failed for {stream_url}")
+                    time.sleep(10)
+                    continue
+
+                detections = []
+                try:
+                    update_flagged_objects()
+                    update_flagged_keywords()
+
+                    visual_results = detect_frame(frame)
+                    detections.extend(visual_results)
+
+                    platform = stream.platform.lower()
+                    if platform in chat_coords:
+                        h, w = frame.shape[:2]
+                        x1, y1, x2, y2 = chat_coords[platform]
+                        chat_roi = frame[int(y1*h):int(y2*h), int(x1*w):int(x2*w)]
+                        chat_text = pytesseract.image_to_string(chat_roi)
+                        chat_detection = detect_chat(chat_text)
+                        if chat_detection.get('status') == 'flagged':
+                            for kw in chat_detection.get('keywords', []):
+                                detections.append({
+                                    'class': f"CHAT: {kw}",
+                                    'confidence': 1.0,
+                                    'box': [80, 90, 100, 95]
+                                })
+
+                    if detections:
+                        log = Log(
+                            room_url=stream_url,
+                            event_type='combined_detection',
+                            details={'detections': detections}
+                        )
+                        db.session.add(log)
+                        
+                        if time.time() - last_notification > 60:
+                            send_notification(f"Alerts in {stream_url}: {len(detections)} items detected")
+                            last_notification = time.time()
+                        
+                        db.session.commit()
+
+                except Exception as e:
+                    print(f"Detection error in {stream_url}: {str(e)}")
+                    db.session.rollback()
+
+                time.sleep(10)
+        finally:
+            cap.release()
+            print(f"Stopped monitoring {stream_url}")
+    finally:
+        app_ctx.pop()
+
+# -------------------------------
+# Main Execution
+# -------------------------------
 if __name__ == '__main__':
     with app.app_context():
         start_monitoring()

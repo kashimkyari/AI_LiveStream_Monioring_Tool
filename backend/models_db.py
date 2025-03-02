@@ -1,3 +1,4 @@
+# models_db.py (PostgreSQL-optimized models)
 from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime
 
@@ -7,16 +8,13 @@ class User(db.Model):
     __tablename__ = 'users'
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False)
+    email = db.Column(db.String(120), unique=True, nullable=False)  # Must provide
+    firstname = db.Column(db.String(80), nullable=False)  # Must provide
+    lastname = db.Column(db.String(80), nullable=False)  # Must provide
+    phonenumber = db.Column(db.String(20), nullable=False)  # Must provide
+    staffid = db.Column(db.String(20))  # Optional
     password = db.Column(db.String(120), nullable=False)
     role = db.Column(db.String(10), nullable=False, default='agent')
-    assignments = db.relationship('Assignment', back_populates='agent')
-
-    def serialize(self):
-        return {
-            'id': self.id,
-            'username': self.username,
-            'role': self.role
-        }
 
 class Stream(db.Model):
     __tablename__ = 'streams'
@@ -25,14 +23,6 @@ class Stream(db.Model):
     platform = db.Column(db.String(50), nullable=False, default='Chaturbate')
     streamer_username = db.Column(db.String(100))
     assignments = db.relationship('Assignment', back_populates='stream')
-
-    def serialize(self):
-        return {
-            'id': self.id,
-            'room_url': self.room_url,
-            'platform': self.platform,
-            'streamer_username': self.streamer_username
-        }
 
 class Assignment(db.Model):
     __tablename__ = 'assignments'
@@ -45,40 +35,18 @@ class Assignment(db.Model):
 class Log(db.Model):
     __tablename__ = 'logs'
     id = db.Column(db.Integer, primary_key=True)
-    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
+    timestamp = db.Column(db.DateTime(timezone=True), default=datetime.utcnow)
     room_url = db.Column(db.String(300))
     event_type = db.Column(db.String(50))
     details = db.Column(db.JSON)
-
-    def serialize(self):
-        return {
-            'id': self.id,
-            'timestamp': self.timestamp.isoformat(),
-            'room_url': self.room_url,
-            'event_type': self.event_type,
-            'details': self.details
-        }
 
 class ChatKeyword(db.Model):
     __tablename__ = 'chat_keywords'
     id = db.Column(db.Integer, primary_key=True)
     keyword = db.Column(db.String(100), unique=True, nullable=False)
 
-    def serialize(self):
-        return {
-            'id': self.id,
-            'keyword': self.keyword
-        }
-
 class FlaggedObject(db.Model):
     __tablename__ = 'flagged_objects'
     id = db.Column(db.Integer, primary_key=True)
     object_name = db.Column(db.String(100), unique=True, nullable=False)
-    confidence_threshold = db.Column(db.Float, default=0.8)
-
-    def serialize(self):
-        return {
-            'id': self.id,
-            'object_name': self.object_name,
-            'confidence_threshold': self.confidence_threshold
-        }
+    confidence_threshold = db.Column(db.Numeric(3, 2), default=0.8)
