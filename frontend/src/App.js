@@ -7,6 +7,9 @@ import AgentDashboard from './components/AgentDashboard';
 function App() {
   const [role, setRole] = useState(null);
   const [activeTab, setActiveTab] = useState('dashboard');
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [toast, setToast] = useState(null);
+  const [notifications, setNotifications] = useState([]);
 
   const checkSession = async () => {
     try {
@@ -23,6 +26,35 @@ function App() {
     checkSession();
   }, []);
 
+  useEffect(() => {
+    if (!role) return;
+
+    const eventSource = new EventSource('/api/notification-events');
+
+    eventSource.onmessage = (e) => {
+      const data = JSON.parse(e.data);
+      if (data.type === 'detection') {
+        // Build a notification message using the backend's payload:
+        // data.object (detected object), data.confidence, and data.stream.
+        const notificationMessage = `🚨 Detected ${data.object} (Confidence: ${data.confidence}) in ${data.stream}`;
+        setUnreadCount(prev => prev + 1);
+        setToast({
+          message: notificationMessage,
+          type: 'alert'
+        });
+        setNotifications(prev => [...prev, { id: data.id, message: notificationMessage }]);
+        setTimeout(() => setToast(null), 5000);
+      }
+    };
+
+    eventSource.onerror = (err) => {
+      console.error('Notification error:', err);
+      eventSource.close();
+    };
+
+    return () => eventSource.close();
+  }, [role]);
+
   const handleLogin = (role) => {
     setRole(role);
   };
@@ -34,6 +66,11 @@ function App() {
     } catch (err) {
       console.error("Logout error", err);
     }
+  };
+
+  const handleNotificationClick = () => {
+    setActiveTab('notifications');
+    setUnreadCount(0);
   };
 
   return (
@@ -48,7 +85,14 @@ function App() {
                 <button onClick={() => setActiveTab('agents')} className={activeTab === 'agents' ? 'active' : ''}>Agents</button>
                 <button onClick={() => setActiveTab('streams')} className={activeTab === 'streams' ? 'active' : ''}>Streams</button>
                 <button onClick={() => setActiveTab('flag')} className={activeTab === 'flag' ? 'active' : ''}>Settings</button>
-                             </nav>
+                <button 
+                  onClick={handleNotificationClick} 
+                  className={activeTab === 'notifications' ? 'active' : ''}
+                >
+                  Notifications
+                  {unreadCount > 0 && <span className="notification-badge">{unreadCount}</span>}
+                </button>
+              </nav>
             )}
             <button className="logout-button" onClick={handleLogout}>Logout</button>
           </div>
@@ -57,9 +101,30 @@ function App() {
       
       <div className="main-content">
         {!role && <Login onLogin={handleLogin} />}
-        {role === 'admin' && <AdminPanel activeTab={activeTab} />}
+        {role === 'admin' && activeTab !== 'notifications' && <AdminPanel activeTab={activeTab} />}
         {role === 'agent' && <AgentDashboard />}
+        {role === 'admin' && activeTab === 'notifications' && (
+          <div className="notifications-tab">
+            <h2>Notifications</h2>
+            {notifications.length === 0 ? (
+              <p>No notifications yet.</p>
+            ) : (
+              notifications.map(note => (
+                <div key={note.id} className="notification-item">
+                  {note.message}
+                </div>
+              ))
+            )}
+          </div>
+        )}
       </div>
+
+      {toast && (
+        <div className={`toast ${toast.type}`}>
+          {toast.message}
+          <div className="toast-progress" />
+        </div>
+      )}
 
       <style jsx global>{`
         body {
@@ -102,6 +167,7 @@ function App() {
           display: flex;
           gap: 12px;
           flex-wrap: wrap;
+          position: relative;
         }
 
         .admin-nav button {
@@ -140,6 +206,22 @@ function App() {
           transform: scaleX(1);
         }
 
+        .notification-badge {
+          position: absolute;
+          top: -8px;
+          right: -8px;
+          background: #ff4444;
+          color: white;
+          width: 20px;
+          height: 20px;
+          border-radius: 50%;
+          font-size: 0.7em;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          animation: pulse 1.5s infinite;
+        }
+
         .logout-button {
           padding: 12px 24px;
           background: linear-gradient(135deg, #007bff, #0056b3);
@@ -160,6 +242,85 @@ function App() {
           max-width: 900px;
           margin: 40px auto;
           padding: 0 20px;
+        }
+
+        .notifications-tab {
+          padding: 20px;
+          background: #1a1a1a;
+          border-radius: 8px;
+          margin-top: 20px;
+        }
+
+        .notification-item {
+          padding: 12px;
+          border-bottom: 1px solid #2d2d2d;
+        }
+        .notification-item:last-child {
+          border-bottom: none;
+        }
+
+        .toast {
+          position: fixed;
+          bottom: 20px;
+          right: 20px;
+          background: #2d2d2d;
+          color: white;
+          padding: 16px 24px;
+          border-radius: 8px;
+          box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+          animation: slideIn 0.3s ease-out;
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          z-index: 2000;
+        }
+
+        .toast.alert {
+          border-left: 4px solid #ff4444;
+        }
+
+        .toast-progress {
+          position: absolute;
+          bottom: 0;
+          left: 0;
+          height: 3px;
+          background: #ffffff44;
+          animation: progress 5s linear;
+        }
+
+        @keyframes slideIn {
+          from { transform: translateX(100%); }
+          to { transform: translateX(0); }
+        }
+
+        @keyframes progress {
+          from { width: 100%; }
+          to { width: 0%; }
+        }
+
+        @keyframes pulse {
+          0% { transform: scale(1); }
+          50% { transform: scale(1.1); }
+          100% { transform: scale(1); }
+        }
+
+        @media (max-width: 768px) {
+          .app-header {
+            padding: 15px;
+          }
+          
+          .admin-nav {
+            gap: 8px;
+          }
+          
+          .admin-nav button {
+            padding: 8px 16px;
+            font-size: 0.9em;
+          }
+          
+          .logout-button {
+            padding: 8px 16px;
+          }
         }
       `}</style>
     </div>

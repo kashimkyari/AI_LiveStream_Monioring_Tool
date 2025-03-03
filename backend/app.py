@@ -22,7 +22,36 @@ import requests
 from io import BytesIO
 from PIL import Image
 import pytesseract
+import base64
+from ultralytics import YOLO
+
+# Import the Bot class directly from the python-telegram-bot package
+from telegram import Bot
+
+# Import send_notification if needed from your notifications module
 from notifications import send_notification
+
+# Initialize Telegram Bot using environment variables
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "AAGWrWMrqzQkDP8bkKe3gafC42r_Ridr0gY")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "8175749575")
+bot = Bot(token=TELEGRAM_TOKEN)
+
+from collections import defaultdict
+
+OBJECT_CACHE_TIME = 5
+last_object_update = 0
+
+def update_flagged_objects():
+    global last_object_update, flagged_objects
+    now = time.time()
+    if now - last_object_update > OBJECT_CACHE_TIME:
+        with app.app_context():
+            objects = FlaggedObject.query.all()
+            flagged_objects = [{
+                'name': obj.object_name.lower(),
+                'threshold': float(obj.confidence_threshold)
+            } for obj in objects]
+        last_object_update = now
 
 # -------------------------------
 # Database Existence Check
@@ -164,10 +193,10 @@ CORS(
 )
 app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql+psycopg2://postgres:password@localhost/stream_monitor'
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
-    'pool_size': 20,           # Increased pool size
-    'max_overflow': 40,        # Increased overflow limit
-    'pool_timeout': 60,        # Increased timeout (seconds)
-    'pool_recycle': 3600,      # Recycle connections every hour
+    'pool_size': 20,
+    'max_overflow': 40,
+    'pool_timeout': 60,
+    'pool_recycle': 3600,
     'pool_pre_ping': True
 }
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
@@ -185,7 +214,16 @@ def shutdown_session(exception=None):
 
 with app.app_context():
     db.create_all()
-    if not User.query.filter_by(username='admin').first():
+    
+    # Check and create admin user
+    admin_exists = db.session.query(
+        User.query.filter(
+            (User.username == 'admin') | 
+            (User.email == 'admin@example.com')
+        ).exists()
+    ).scalar()
+    
+    if not admin_exists:
         admin_user = User(
             username='admin',
             password='admin',
@@ -196,7 +234,21 @@ with app.app_context():
             role='admin'
         )
         db.session.add(admin_user)
-    if not User.query.filter_by(username='agent').first():
+        try:
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            print("Admin user already exists with different credentials")
+
+    # Check and create agent user
+    agent_exists = db.session.query(
+        User.query.filter(
+            (User.username == 'agent') | 
+            (User.email == 'agent@example.com')
+        ).exists()
+    ).scalar()
+    
+    if not agent_exists:
         agent_user = User(
             username='agent',
             password='agent',
@@ -207,12 +259,17 @@ with app.app_context():
             role='agent'
         )
         db.session.add(agent_user)
+        try:
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            print("Agent user already exists with different credentials")
+    
     db.session.commit()
 
 # -------------------------------
 # Detection Functions Integration
 # -------------------------------
-
 # Audio Detection (from audio.py)
 def detect_audio(stream_url):
     if random.randint(0, 10) > 8:
@@ -251,7 +308,8 @@ def detect_chat(stream_url):
     return {'status': 'clean'}
 
 # Visual Detection (from visual.py)
-model = torch.hub.load('ultralytics/yolov5', 'yolov5s', pretrained=True, trust_repo=True)
+# model = torch.hub.load('ultralytics/yolov5s', 'yolov5s', pretrained=True, trust_repo=True)
+model = YOLO("yolov8s.pt")
 flagged_objects = []
 
 def update_flagged_objects():
@@ -264,20 +322,32 @@ def update_flagged_objects():
         } for obj in objects]
 
 def detect_frame(frame):
+    # Resize the frame for consistent processing
+    frame = cv2.resize(frame, (640, 480))
     results = model(frame)
-    detections = results.xyxy[0]
-    detected = []
-    for *box, conf, cls in detections:
-        class_name = model.names[int(cls)].lower()
+    # Get the detections tensor from the first result
+    boxes = results[0].boxes.data  # Tensor of shape (n, 6): [x1, y1, x2, y2, conf, cls]
+    processed = []
+    for detection in boxes:
+        # Convert detection to numpy array if necessary
+        detection = detection.cpu().numpy()  # [x1, y1, x2, y2, conf, cls]
+        x1, y1, x2, y2, conf, cls = detection
+        cls = int(cls)
+        # Get the class name. model.names might be a list or dict.
+        if isinstance(model.names, dict):
+            class_name = model.names.get(cls, "unknown").lower()
+        else:
+            class_name = model.names[cls].lower() if cls < len(model.names) else "unknown"
         flagged_obj = next((obj for obj in flagged_objects if obj['name'] == class_name), None)
-        if flagged_obj and conf.item() >= flagged_obj['threshold']:
-            detected.append({
+        if flagged_obj and conf >= flagged_obj['threshold']:
+            processed.append({
                 'class': class_name,
-                'confidence': conf.item(),
-                'box': [float(x) for x in box],
-                'threshold': flagged_obj['threshold']
+                'confidence': float(conf),
+                'box': [float(x1), float(y1), float(x2), float(y2)]
             })
-    return detected
+    return processed
+
+
 
 def detect_visual(stream_url):
     cap = cv2.VideoCapture(stream_url)
@@ -313,9 +383,56 @@ def update_flagged_keywords():
 update_flagged_keywords()
 
 # -------------------------------
+# New Helper: Check if a stream is online
+# -------------------------------
+def is_stream_online(stream_url):
+    # Extract streamer name from URL
+    streamer = stream_url.rstrip('/').split('/')[-1]
+    thumbnail_url = f"https://jpeg.live.mmcdn.com/stream?room={streamer}&f=0.8399472484345041"
+    try:
+        response = requests.head(thumbnail_url, timeout=5)
+        return response.status_code == 200
+    except Exception as e:
+        print(f"Error checking stream status: {e}")
+        return False
+
+# -------------------------------
+# New Helper: Telegram Notification
+# -------------------------------
+def send_telegram_notification(description, stream_url):
+    # Use the thumbnail from the stream URL as the image
+    streamer = stream_url.rstrip('/').split('/')[-1]
+    thumbnail_url = f"https://jpeg.live.mmcdn.com/stream?room={streamer}&f=0.8399472484345041"
+    try:
+        bot.send_photo(chat_id=TELEGRAM_CHAT_ID, photo=thumbnail_url, caption=description)
+    except Exception as e:
+        print(f"Error sending telegram notification: {e}")
+
+def start_notification_monitor():
+    def monitor_notifications():
+        last_notified_time = datetime.utcnow() - timedelta(seconds=5)
+        while True:
+            try:
+                with app.app_context():
+                    logs = Log.query.filter(
+                        Log.timestamp > last_notified_time,
+                        Log.event_type == 'object_detection'
+                    ).all()
+                    for log in logs:
+                        for det in log.details.get('detections', []):
+                            description = f"Detected {det.get('class')} with confidence {det.get('confidence'):.2f} in stream {log.room_url}"
+                            send_telegram_notification(description, log.room_url)
+                    if logs:
+                        last_notified_time = max(log.timestamp for log in logs)
+            except Exception as e:
+                print(f"Notification monitor error: {e}")
+            time.sleep(2)
+    thread = threading.Thread(target=monitor_notifications, daemon=True)
+    thread.start()
+
+# -------------------------------
 # Original API Routes (from app.py)
 # -------------------------------
-
 @app.route('/api/login', methods=['POST'])
 def login():
     data = request.get_json()
@@ -487,6 +604,10 @@ def update_stream(stream_id):
 def delete_stream(stream_id):
     if not (stream := Stream.query.get(stream_id)):
         return jsonify({'message': 'Stream not found'}), 404
+    # Delete any associated assignments first
+    assignments = Assignment.query.filter_by(stream_id=stream.id).all()
+    for assignment in assignments:
+        db.session.delete(assignment)
     db.session.delete(stream)
     db.session.commit()
     return jsonify({'message': 'Stream deleted'})
@@ -643,6 +764,9 @@ def test_visual_frame():
     except Exception as e:
         return jsonify({'message': f'Processing error: {str(e)}'}), 500
 
+# -------------------------------
+# Updated Livestream Preview with Dynamic Detected Objects List
+# -------------------------------
 @app.route('/api/test/visual/stream', methods=['GET'])
 @login_required(role='admin')
 def stream_visual():
@@ -651,24 +775,31 @@ def stream_visual():
         if not cap.isOpened():
             yield "data: " + json.dumps({"error": "Could not open video source"}) + "\n\n"
             return
-        
+        # Initialize a set to keep track of detected objects dynamically
+        detected_objects_set = set()
         try:
             while True:
                 ret, frame = cap.read()
                 if not ret:
                     yield "data: " + json.dumps({"error": "Frame capture failed"}) + "\n\n"
                     continue
-                
                 try:
                     results = detect_frame(frame)
-                    yield "data: " + json.dumps(results) + "\n\n"
+                    # Update the set with newly detected object classes
+                    for det in results:
+                        if 'class' in det:
+                            detected_objects_set.add(det['class'])
+                    payload = {
+                        'results': results,
+                        'detected_objects': list(detected_objects_set),
+                        'model': 'yolov5s'
+                    }
+                    yield "data: " + json.dumps(payload) + "\n\n"
                 except Exception as e:
                     yield "data: " + json.dumps({"error": f"Detection error: {str(e)}"}) + "\n\n"
-                
                 time.sleep(0.5)
         finally:
             cap.release()
-    
     return app.response_class(generate(), mimetype='text/event-stream')
 
 # -------------------------------
@@ -677,19 +808,31 @@ def stream_visual():
 @app.route('/api/detection-events', methods=['GET'])
 def detection_events():
     def generate():
-        with app.app_context():  # Use context manager
+        with app.app_context():
             while True:
                 try:
+                    # Get detections from last 15 seconds
+                    cutoff = datetime.utcnow() - timedelta(seconds=15)
                     logs = Log.query.filter(
-                        Log.event_type.in_(['object_detection', 'combined_detection'])
-                    ).order_by(Log.timestamp.desc()).limit(10).all()
+                        Log.timestamp >= cutoff,
+                        Log.event_type == 'object_detection'
+                    ).all()
                     
+                    # Group by stream URL
+                    stream_detections = defaultdict(list)
                     for log in logs:
-                        yield f"data: {json.dumps({'stream_url': log.room_url, 'detections': log.details.get('detections', [])})}\n\n"
+                        stream_detections[log.room_url].extend(log.details.get('detections', []))
+                    
+                    for url, detections in stream_detections.items():
+                        payload = json.dumps({
+                            'stream_url': url,
+                            'detections': detections
+                        })
+                        yield f"data: {payload}\n\n"
+                    
                     time.sleep(2)
                 except Exception as e:
                     print(f"SSE Error: {str(e)}")
-                    yield f"data: {json.dumps({'error': str(e)})}\n\n"
                     time.sleep(5)
     return app.response_class(generate(), mimetype='text/event-stream')
 
@@ -709,6 +852,77 @@ def unified_detect():
         'visual': visual_results
     })
 
+def detect_frame(frame):
+    # Resize the frame for consistent processing
+    frame = cv2.resize(frame, (640, 480))
+    results = model(frame)
+    
+    # Process YOLOv8 results
+    detections = []
+    for result in results:
+        boxes = result.boxes.data.cpu().numpy()
+        for detection in boxes:
+            x1, y1, x2, y2, conf, cls = detection
+            class_id = int(cls)
+            class_name = model.names[class_id].lower()
+            
+            # Check against flagged objects
+            flagged_obj = next((obj for obj in flagged_objects 
+                              if obj['name'] == class_name), None)
+            if flagged_obj and conf >= flagged_obj['threshold']:
+                detections.append({
+                    'class': class_name,
+                    'confidence': float(conf),
+                    'box': [float(x1), float(y1), float(x2), float(y2)]
+                })
+    
+    return detections
+
+@app.route('/api/detect-objects', methods=['POST'])
+@login_required()
+def detect_objects():
+    try:
+        data = request.get_json()
+        if 'image_data' not in data:
+            return jsonify({'error': 'Missing image data'}), 400
+        
+        # Decode base64
+        try:
+            img_bytes = base64.b64decode(data['image_data'])
+            img = Image.open(BytesIO(img_bytes)).convert('RGB')
+            frame = np.array(img)
+        except Exception as e:
+            return jsonify({'error': 'Invalid image data'}), 400
+
+        # Perform detection
+        update_flagged_objects()
+        results = detect_frame(frame)
+
+        # Convert boxes to percentages
+        height, width = frame.shape[:2]
+        detections = []
+        for det in results:
+            try:
+                x1 = (det['box'][0] / width) * 100
+                y1 = (det['box'][1] / height) * 100
+                x2 = (det['box'][2] / width) * 100
+                y2 = (det['box'][3] / height) * 100
+                
+                detections.append({
+                    'class': det['class'],
+                    'confidence': det['confidence'],
+                    'box': [x1, y1, x2, y2],
+                    'source': 'ai'
+                })
+            except KeyError:
+                continue
+
+        return jsonify({'detections': detections})
+
+    except Exception as e:
+        print(f"Detection error: {str(e)}")
+        return jsonify({'error': 'Processing failed'}), 500
+
 def start_monitoring():
     with app.app_context():
         streams = Stream.query.all()
@@ -724,78 +938,64 @@ def start_monitoring():
 def monitor_stream(stream_url):
     app_ctx = app.app_context()
     app_ctx.push()
+    
     try:
         stream = Stream.query.filter_by(room_url=stream_url).first()
         if not stream:
-            print(f"Stream {stream_url} not found in database")
             return
 
-        cap = cv2.VideoCapture(stream_url)
-        if not cap.isOpened():
-            print(f"Failed to open video stream: {stream_url}")
-            return
+        retries = 0
+        max_retries = 5
+        cooldown = 60  # 1 minute base
 
-        last_notification = time.time()
-        chat_coords = {
-            'chaturbate': (0.7, 0.1, 0.98, 0.9),
-            'stripchat': (0.65, 0.05, 0.95, 0.85)
-        }
-
-        try:
-            while cap.isOpened():
-                ret, frame = cap.read()
-                if not ret:
-                    print(f"Frame read failed for {stream_url}")
-                    time.sleep(10)
-                    continue
-
-                detections = []
-                try:
-                    update_flagged_objects()
-                    update_flagged_keywords()
-
-                    visual_results = detect_frame(frame)
-                    detections.extend(visual_results)
-
-                    platform = stream.platform.lower()
-                    if platform in chat_coords:
-                        h, w = frame.shape[:2]
-                        x1, y1, x2, y2 = chat_coords[platform]
-                        chat_roi = frame[int(y1*h):int(y2*h), int(x1*w):int(x2*w)]
-                        chat_text = pytesseract.image_to_string(chat_roi)
-                        chat_detection = detect_chat(chat_text)
-                        if chat_detection.get('status') == 'flagged':
-                            for kw in chat_detection.get('keywords', []):
-                                detections.append({
-                                    'class': f"CHAT: {kw}",
-                                    'confidence': 1.0,
-                                    'box': [80, 90, 100, 95]
-                                })
-
-                    if detections:
-                        log = Log(
-                            room_url=stream_url,
-                            event_type='combined_detection',
-                            details={'detections': detections}
-                        )
-                        db.session.add(log)
-                        
-                        if time.time() - last_notification > 60:
-                            send_notification(f"Alerts in {stream_url}: {len(detections)} items detected")
-                            last_notification = time.time()
-                        
-                        db.session.commit()
-
-                except Exception as e:
-                    print(f"Detection error in {stream_url}: {str(e)}")
-                    db.session.rollback()
-
+        while retries < max_retries:
+            try:
+                if not is_stream_online(stream_url):
+                    raise Exception("Stream offline")
+                
+                # Detection logic here
+                retries = 0  # Reset on success
                 time.sleep(10)
-        finally:
-            cap.release()
-            print(f"Stopped monitoring {stream_url}")
+                
+            except Exception as e:
+                print(f"Monitoring error: {str(e)}")
+                retries += 1
+                sleep_time = cooldown * (2 ** retries)
+                print(f"Retrying in {sleep_time}s...")
+                time.sleep(sleep_time)
+                
+        print(f"Stopped monitoring {stream_url}")
+        
     finally:
         app_ctx.pop()
+
+@app.route('/api/notification-events')
+def notification_events():
+    def generate():
+        with app.app_context():
+            last_id = 0
+            while True:
+                try:
+                    cutoff = datetime.utcnow() - timedelta(seconds=2)
+                    logs = Log.query.filter(
+                        Log.timestamp >= cutoff,
+                        Log.event_type == 'object_detection'
+                    ).all()
+                    
+                    grouped = defaultdict(list)
+                    for log in logs:
+                        for det in log.details.get('detections', []):
+                            grouped[(log.room_url, det['class'])].append(det['confidence'])
+                    
+                    for (stream, cls), confs in grouped.items():
+                        yield f"data: {json.dumps({'type': 'detection','stream': stream,'object': cls,'confidence': max(confs),'id': last_id + 1})}\n\n"
+                        last_id += 1
+                    
+                    time.sleep(1)
+                except Exception as e:
+                    print(f"SSE Error: {str(e)}")
+                    time.sleep(5)
+    return app.response_class(generate(), mimetype='text/event-stream')
 
 # -------------------------------
 # Main Execution
@@ -803,4 +1003,5 @@ def monitor_stream(stream_url):
 if __name__ == '__main__':
     with app.app_context():
         start_monitoring()
+        start_notification_monitor()
     app.run(host='0.0.0.0', port=5000, threaded=True)

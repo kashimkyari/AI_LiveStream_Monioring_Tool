@@ -1,55 +1,120 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import axios from 'axios';
 
-const VideoPlayer = ({ room_url, streamer_username, thumbnail = false, alerts = [] }) => {
+const VideoPlayer = ({ streamer_username, thumbnail = false, alerts = [] }) => {
   const [thumbnailError, setThumbnailError] = useState(false);
   const [visibleAlerts, setVisibleAlerts] = useState([]);
-  const [timestamp, setTimestamp] = useState(Date.now());
+  const [currentFrame, setCurrentFrame] = useState(null);
+  const [isOnline, setIsOnline] = useState(true);
+  const [detections, setDetections] = useState([]);
+  const retryTimeout = useRef(null);
+  const detectionActive = useRef(false);
 
-  const embedUrl = `https://cbxyz.com/in/?tour=SHBY&campaign=GoTLr&track=embed&room=${streamer_username}`;
+  const detectObjects = useCallback(async (imageUrl) => {
+    try {
+      const base64Data = imageUrl.split(',')[1];
+      const response = await axios.post('/api/detect-objects', {
+        image_data: base64Data,
+        streamer: streamer_username
+      });
+      return response.data.detections || [];
+    } catch (error) {
+      console.error('AI detection error:', error);
+      return [];
+    }
+  }, [streamer_username]);
+
+  const fetchThumbnail = useCallback(async () => {
+    if (!isOnline || detectionActive.current || !thumbnail) return;
+
+    try {
+      detectionActive.current = true;
+      const timestamp = Date.now();
+      const res = await fetch(
+        `https://jpeg.live.mmcdn.com/stream?room=${streamer_username}&t=${timestamp}`
+      );
+      
+      if (!res.ok) throw new Error('Stream offline');
+      
+      const blob = await res.blob();
+      const reader = new FileReader();
+      
+      reader.onload = async () => {
+        const imageUrl = reader.result;
+        setCurrentFrame(imageUrl);
+        setThumbnailError(false);
+        
+        const aiDetections = await detectObjects(imageUrl);
+        setDetections(aiDetections);
+        setIsOnline(true);
+      };
+      
+      reader.readAsDataURL(blob);
+    } catch (error) {
+      handleOfflineState(error);
+    } finally {
+      detectionActive.current = false;
+    }
+  }, [isOnline, streamer_username, thumbnail, detectObjects]);
+
+  const handleOfflineState = (error) => {
+    console.error('Stream offline:', error);
+    setThumbnailError(true);
+    setIsOnline(false);
+    clearTimeout(retryTimeout.current);
+    
+    const baseDelay = 60000 * Math.pow(2, 3); // 8 minutes max
+    const jitter = Math.random() * 15000;
+    retryTimeout.current = setTimeout(() => {
+      setIsOnline(true);
+      fetchThumbnail();
+    }, baseDelay + jitter);
+  };
 
   useEffect(() => {
-    let interval;
     if (thumbnail) {
-      interval = setInterval(() => {
-        setTimestamp(Date.now());
-      }, 1000);
+      fetchThumbnail();
+      const interval = setInterval(fetchThumbnail, isOnline ? 200 : 600);
+      return () => {
+        clearInterval(interval);
+        clearTimeout(retryTimeout.current);
+      };
     }
-    return () => clearInterval(interval);
-  }, [thumbnail]);
+  }, [thumbnail, isOnline, fetchThumbnail]);
 
   useEffect(() => {
     const timeout = setTimeout(() => {
-      setVisibleAlerts(alerts);
+      setVisibleAlerts([...alerts, ...detections]);
     }, 300);
     return () => clearTimeout(timeout);
-  }, [alerts]);
+  }, [alerts, detections]);
 
   return (
     <div className="video-container">
       {thumbnail ? (
         <div className="thumbnail-wrapper">
-          <img
-            src={`https://jpeg.live.mmcdn.com/stream?room=${streamer_username}&f=0.8399472484345041&t=${timestamp}`}
-            alt="Stream thumbnail"
-            onError={() => setThumbnailError(true)}
-            className="thumbnail-image"
-          />
-          {thumbnailError && (
+          {currentFrame && !thumbnailError ? (
+            <img
+              src={currentFrame}
+              alt="Live stream thumbnail"
+              className="thumbnail-image"
+              onError={() => setThumbnailError(true)}
+            />
+          ) : (
             <div className="thumbnail-fallback">
-              <span>Room is offline</span>
+              <span>{isOnline ? 'Loading...' : 'Offline (Retrying)'}</span>
             </div>
           )}
         </div>
       ) : (
         <div className="embedded-player-container">
           <iframe
-            src={embedUrl}
+            src={`https://cbxyz.com/in/?tour=SHBY&campaign=GoTLr&track=embed&room=${streamer_username}`}
             className="embedded-player"
             allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
             allowFullScreen
             frameBorder="0"
             scrolling="no"
-            key={embedUrl}
           />
         </div>
       )}
@@ -58,7 +123,7 @@ const VideoPlayer = ({ room_url, streamer_username, thumbnail = false, alerts = 
         {visibleAlerts.map((detection, index) => (
           <div 
             key={`${detection.class}-${index}`}
-            className={`alert-marker ${detection.class.includes('CHAT') ? 'chat-alert' : ''}`}
+            className={`alert-marker ${detection.source === 'chat' ? 'chat-alert' : 'ai-alert'}`}
             style={{
               left: `${detection.box[0]}%`,
               top: `${detection.box[1]}%`,
@@ -66,10 +131,12 @@ const VideoPlayer = ({ room_url, streamer_username, thumbnail = false, alerts = 
               height: `${detection.box[3] - detection.box[1]}%`
             }}
           >
-            <div className={`alert-label ${detection.class.includes('CHAT') ? 'chat-label' : ''}`}>
-              {detection.class.includes('CHAT') 
-                ? `⚠️ ${detection.class.replace('CHAT: ', '')}`
-                : `${detection.class} (${(detection.confidence * 100).toFixed(1)}%)`}
+            <div className={`alert-label ${detection.source === 'chat' ? 'chat-label' : 'ai-label'}`}>
+              {detection.source === 'ai' ? (
+                `${detection.class} (${(detection.confidence * 100).toFixed(1)}%)`
+              ) : (
+                `⚠️ ${detection.class.replace('CHAT: ', '')}`
+              )}
             </div>
           </div>
         ))}
@@ -113,6 +180,7 @@ const VideoPlayer = ({ room_url, streamer_username, thumbnail = false, alerts = 
           justify-content: center;
           color: #fff;
           font-size: 0.9em;
+          animation: fadeIn 0.5s ease;
         }
 
         .embedded-player {
@@ -133,27 +201,27 @@ const VideoPlayer = ({ room_url, streamer_username, thumbnail = false, alerts = 
 
         .alert-marker {
           position: absolute;
-          border: 2px solid #ff4444aa;
-          background: #ff444422;
+          border: 2px solid;
+          background: transparent;
           transition: all 0.3s ease;
           transform: translateZ(0);
+          animation: pulseBox 1.5s infinite;
         }
 
         .alert-marker.chat-alert {
           border-color: #44ff44aa;
           background: #44ff4422;
-          border-radius: 4px;
-          width: 20% !important;
-          height: 5% !important;
-          left: 80% !important;
-          top: 90% !important;
+        }
+
+        .alert-marker.ai-alert {
+          border-color: #ffa500aa;
+          background: #ffa50022;
         }
 
         .alert-label {
           position: absolute;
           bottom: 100%;
           left: 0;
-          background: #ff4444dd;
           color: white;
           padding: 4px 8px;
           font-size: 0.8em;
@@ -161,31 +229,31 @@ const VideoPlayer = ({ room_url, streamer_username, thumbnail = false, alerts = 
           white-space: nowrap;
           backdrop-filter: blur(2px);
           box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+          animation: slideIn 0.3s ease-out;
         }
 
-        .alert-label.chat-label {
+        .chat-label {
           background: #44ff44dd;
-          bottom: auto;
-          top: -5px;
-          left: 50%;
-          transform: translateX(-50%);
-          font-weight: bold;
         }
 
-        .alert-label::after {
-          content: "";
-          position: absolute;
-          top: 100%;
-          left: 8px;
-          border-width: 5px;
-          border-style: solid;
-          border-color: #ff4444dd transparent transparent transparent;
+        .ai-label {
+          background: #ffa500dd;
         }
 
-        .alert-label.chat-label::after {
-          border-color: #44ff44dd transparent transparent transparent;
-          top: auto;
-          bottom: -10px;
+        @keyframes pulseBox {
+          0% { opacity: 0.6; }
+          50% { opacity: 1; }
+          100% { opacity: 0.6; }
+        }
+
+        @keyframes slideIn {
+          from { transform: translateY(10px); opacity: 0; }
+          to { transform: translateY(0); opacity: 1; }
+        }
+
+        @keyframes fadeIn {
+          from { opacity: 0; }
+          to { opacity: 1; }
         }
 
         @media (max-width: 768px) {
@@ -197,11 +265,6 @@ const VideoPlayer = ({ room_url, streamer_username, thumbnail = false, alerts = 
           .alert-label {
             font-size: 0.7em;
             padding: 2px 4px;
-          }
-
-          .alert-marker.chat-alert {
-            width: 30% !important;
-            left: 70% !important;
           }
         }
       `}</style>

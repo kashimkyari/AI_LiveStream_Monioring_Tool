@@ -7,3 +7,5 @@ torchvision
 spacy
 beautifulsoup4
 pytesseract
+telegram
+python-telegram-bot
