@@ -24,12 +24,21 @@ from PIL import Image
 import pytesseract
 import base64
 from ultralytics import YOLO
-
+from moviepy.editor import VideoFileClip
+import speech_recognition as sr
+import io
+import wave
 # Import the Bot class directly from the python-telegram-bot package
 from telegram import Bot
 
 # Import send_notification if needed from your notifications module
 from notifications import send_notification
+
+app.config['CHAT_IMAGES_FOLDER'] = os.path.join(app.config['UPLOAD_FOLDER'], 'chat_images')
+app.config['FLAGGED_CHAT_IMAGES_FOLDER'] = os.path.join(app.config['UPLOAD_FOLDER'], 'flagged_chat_images')
+os.makedirs(app.config['CHAT_IMAGES_FOLDER'], exist_ok=True)
+os.makedirs(app.config['FLAGGED_CHAT_IMAGES_FOLDER'], exist_ok=True)
+
 
 # Initialize Telegram Bot using environment variables
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "AAGWrWMrqzQkDP8bkKe3gafC42r_Ridr0gY")
@@ -272,9 +281,66 @@ with app.app_context():
 # -------------------------------
 # Audio Detection (from audio.py)
 def detect_audio(stream_url):
-    if random.randint(0, 10) > 8:
-        return "Audio anomaly detected"
-    return None
+    """
+    Extracts audio from the video at stream_url in memory, transcribes it,
+    checks for flagged keywords (from the flaggedkeywords/ChatKeyword table),
+    and sends a Telegram notification if any flagged words are found.
+    """
+    try:
+        # Load video and extract its audio track
+        clip = VideoFileClip(stream_url)
+        audio_clip = clip.audio
+        
+        # Define the sample rate and convert audio to a numpy array
+        sample_rate = 44100  # You can adjust as needed
+        audio_array = audio_clip.to_soundarray(fps=sample_rate)
+        # Convert from float (-1 to 1) to int16 PCM format
+        audio_int16 = np.int16(audio_array * 32767)
+        
+        # Write WAV data into an in-memory buffer
+        buf = io.BytesIO()
+        with wave.open(buf, 'wb') as wf:
+            # Determine number of channels from the shape of the audio array
+            n_channels = 1 if len(audio_array.shape) == 1 else audio_array.shape[1]
+            wf.setnchannels(n_channels)
+            wf.setsampwidth(2)  # 2 bytes for int16
+            wf.setframerate(sample_rate)
+            wf.writeframes(audio_int16.tobytes())
+        buf.seek(0)  # Reset buffer position
+        
+        # Transcribe the audio using SpeechRecognition (Google Web Speech API)
+        recognizer = sr.Recognizer()
+        with sr.AudioFile(buf) as source:
+            audio_data = recognizer.record(source)
+            transcript = recognizer.recognize_google(audio_data)
+        
+        # Process transcript: refresh keywords from the flagged keywords table and run the matcher
+        refresh_keywords()  # Reload flagged keywords from the admin settings (e.g., ChatKeyword table)
+        doc = nlp(transcript.lower())
+        matches = matcher(doc)
+        detected_keywords = set()
+        for match_id, start, end in matches:
+            span = doc[start:end]
+            detected_keywords.add(span.text)
+        
+        # If any flagged keywords are detected, send a Telegram notification
+        if detected_keywords:
+            description = (
+                f"Audio flagged: Detected keywords {', '.join(detected_keywords)} in stream {stream_url}"
+            )
+            send_telegram_notification(description, stream_url)
+            notification_status = "Notification sent"
+        else:
+            notification_status = "No flagged keywords detected"
+        
+        return {
+            "transcript": transcript,
+            "detected_keywords": list(detected_keywords),
+            "notification": notification_status
+        }
+    except Exception as e:
+        print(f"Audio detection error: {str(e)}")
+        return None
 
 # Chat Detection (from chat.py)
 nlp = spacy.load("en_core_web_sm")
@@ -977,25 +1043,148 @@ def notification_events():
             while True:
                 try:
                     cutoff = datetime.utcnow() - timedelta(seconds=2)
+                    # Retrieve logs for both object and chat detection events.
                     logs = Log.query.filter(
                         Log.timestamp >= cutoff,
-                        Log.event_type == 'object_detection'
+                        Log.event_type.in_(['object_detection', 'chat_detection'])
                     ).all()
-                    
-                    grouped = defaultdict(list)
+
                     for log in logs:
-                        for det in log.details.get('detections', []):
-                            grouped[(log.room_url, det['class'])].append(det['confidence'])
-                    
-                    for (stream, cls), confs in grouped.items():
-                        yield f"data: {json.dumps({'type': 'detection','stream': stream,'object': cls,'confidence': max(confs),'id': last_id + 1})}\n\n"
-                        last_id += 1
-                    
+                        payload = {}
+                        if log.event_type == 'object_detection':
+                            # Group detections by stream and object.
+                            grouped = defaultdict(list)
+                            for det in log.details.get('detections', []):
+                                grouped[(log.room_url, det['class'])].append(det['confidence'])
+                            for (stream, cls), confs in grouped.items():
+                                payload = {
+                                    'type': 'detection',
+                                    'stream': stream,
+                                    'object': cls,
+                                    'confidence': max(confs),
+                                    'id': last_id + 1
+                                }
+                                yield f"data: {json.dumps(payload)}\n\n"
+                                last_id += 1
+                        elif log.event_type == 'chat_detection':
+                            payload = {
+                                'type': 'chat',
+                                'room': log.room_url,  # e.g., "chat" or actual room identifier
+                                'keywords': log.details.get('keywords'),
+                                'ocr_text': log.details.get('ocr_text'),
+                                'id': last_id + 1
+                            }
+                            yield f"data: {json.dumps(payload)}\n\n"
+                            last_id += 1
                     time.sleep(1)
                 except Exception as e:
                     print(f"SSE Error: {str(e)}")
                     time.sleep(5)
     return app.response_class(generate(), mimetype='text/event-stream')
+
+
+def send_chat_telegram_notification(image_path, description):
+    """
+    Sends a Telegram notification with the flagged chat image attached.
+    """
+    try:
+        with open(image_path, "rb") as image_file:
+            bot.send_photo(chat_id=TELEGRAM_CHAT_ID, photo=image_file, caption=description)
+    except Exception as e:
+        print(f"Error sending chat telegram notification: {e}")
+
+@app.route('/api/detect-chat', methods=['POST'])
+def detect_chat_from_image():
+    """
+    Endpoint to process a chatbox image captured from the frontend.
+    Uses OCR to extract text, checks against flagged keywords stored in the DB,
+    and if any keywords are detected, moves the image to a flagged folder,
+    logs the event, and sends a Telegram notification.
+    """
+    if 'chat_image' not in request.files:
+        return jsonify({'message': 'No chat image provided'}), 400
+
+    file = request.files['chat_image']
+    filename = secure_filename(file.filename)
+    if not filename:
+        return jsonify({'message': 'Invalid filename'}), 400
+
+    # Save the image temporarily in the CHAT_IMAGES_FOLDER with a unique filename
+    timestamp = int(time.time() * 1000)
+    new_filename = f"{timestamp}_{filename}"
+    chat_image_path = os.path.join(app.config['CHAT_IMAGES_FOLDER'], new_filename)
+    file.save(chat_image_path)
+
+    # Open the image and run OCR to extract text
+    image = Image.open(chat_image_path)
+    ocr_text = pytesseract.image_to_string(image)
+
+    # Refresh flagged keywords from the ChatKeyword table (updates the global flagged_keywords list)
+    update_flagged_keywords()  # This function queries ChatKeyword and sets flagged_keywords
+
+    # Check for flagged keywords (case-insensitive match)
+    detected_keywords = []
+    for keyword in flagged_keywords:
+        if keyword.lower() in ocr_text.lower():
+            detected_keywords.append(keyword)
+
+    if detected_keywords:
+        # Move the image to the flagged folder for permanent storage
+        flagged_filename = f"flagged_{new_filename}"
+        flagged_filepath = os.path.join(app.config['FLAGGED_CHAT_IMAGES_FOLDER'], flagged_filename)
+        shutil.move(chat_image_path, flagged_filepath)
+
+        # Prepare a notification message
+        description = (
+            f"Chat flagged: Detected keywords {', '.join(detected_keywords)}. OCR text: {ocr_text}"
+        )
+
+        # Log the event in the database (for in-app notifications)
+        log = Log(
+            room_url="chat",  # You can replace this with an actual chatroom identifier if available
+            event_type='chat_detection',
+            details={'keywords': detected_keywords, 'ocr_text': ocr_text}
+        )
+        db.session.add(log)
+        db.session.commit()
+
+        # Send a Telegram notification with the flagged image attached
+        send_chat_telegram_notification(flagged_filepath, description)
+
+        return jsonify({'message': 'Flagged keywords detected', 'keywords': detected_keywords})
+    else:
+        # No flagged keywords found; the temporary image remains and will be cleaned up shortly
+        return jsonify({'message': 'No flagged keywords detected'})
+
+def cleanup_chat_images():
+    """
+    Deletes images from the temporary chat images folder that are older than 20 seconds.
+    """
+    chat_folder = app.config['CHAT_IMAGES_FOLDER']
+    now = time.time()
+    for filename in os.listdir(chat_folder):
+        filepath = os.path.join(chat_folder, filename)
+        if os.path.isfile(filepath):
+            file_age = now - os.path.getctime(filepath)
+            if file_age > 20:
+                try:
+                    os.remove(filepath)
+                except Exception as e:
+                    print(f"Error deleting file {filepath}: {e}")
+
+def start_chat_cleanup_thread():
+    """
+    Starts a background thread that cleans up temporary chat images every 20 seconds.
+    """
+    def cleanup_loop():
+        while True:
+            try:
+                cleanup_chat_images()
+            except Exception as e:
+                print(f"Chat cleanup error: {e}")
+            time.sleep(20)
+    thread = threading.Thread(target=cleanup_loop, daemon=True)
+    thread.start()
 
 # -------------------------------
 # Main Execution
@@ -1004,4 +1193,6 @@ if __name__ == '__main__':
     with app.app_context():
         start_monitoring()
         start_notification_monitor()
+        start_chat_cleanup_thread()  # Start background cleanup for temporary chat images
     app.run(host='0.0.0.0', port=5000, threaded=True)
+
