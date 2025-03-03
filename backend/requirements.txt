@@ -14,3 +14,4 @@ ultralytics
 python-telegram-bot
 moviepy
 SpeechRecognition
+cv2

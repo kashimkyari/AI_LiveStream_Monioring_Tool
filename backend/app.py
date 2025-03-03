@@ -24,7 +24,7 @@ from PIL import Image
 import pytesseract
 import base64
 from ultralytics import YOLO
-from moviepy.editor import VideoFileClip
+#from moviepy.editor import VideoFileClip
 import speech_recognition as sr
 import io
 import wave
