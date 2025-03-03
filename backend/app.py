@@ -34,10 +34,6 @@ from telegram import Bot
 # Import send_notification if needed from your notifications module
 from notifications import send_notification
 
-app.config['CHAT_IMAGES_FOLDER'] = os.path.join(app.config['UPLOAD_FOLDER'], 'chat_images')
-app.config['FLAGGED_CHAT_IMAGES_FOLDER'] = os.path.join(app.config['UPLOAD_FOLDER'], 'flagged_chat_images')
-os.makedirs(app.config['CHAT_IMAGES_FOLDER'], exist_ok=True)
-os.makedirs(app.config['FLAGGED_CHAT_IMAGES_FOLDER'], exist_ok=True)
 
 
 # Initialize Telegram Bot using environment variables
@@ -213,6 +209,11 @@ app.config['SECRET_KEY'] = 'supersecretkey'
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=7)
 app.config['UPLOAD_FOLDER'] = 'uploads'
 ALLOWED_EXTENSIONS = {'mp4', 'avi', 'mov'}
+app.config['CHAT_IMAGES_FOLDER'] = os.path.join(app.config['UPLOAD_FOLDER'], 'chat_images')
+app.config['FLAGGED_CHAT_IMAGES_FOLDER'] = os.path.join(app.config['UPLOAD_FOLDER'], 'flagged_chat_images')
+os.makedirs(app.config['CHAT_IMAGES_FOLDER'], exist_ok=True)
+os.makedirs(app.config['FLAGGED_CHAT_IMAGES_FOLDER'], exist_ok=True)
+
 
 db.init_app(app)
 
