@@ -1,15 +1,15 @@
 # ---------------------------------------
-# Deployment: Robust Application Deployment
+# Deployment: AI Streamer Application
 # ---------------------------------------
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: ai-streamer-deployment      # (Matches EKS_DEPLOYMENT in your workflows)
-  namespace: default                # (Or change to your custom namespace)
+  name: ai-streamer-deployment   # Use this as your EKS_DEPLOYMENT
+  namespace: default             # Change if you use a custom namespace (EKS_NAMESPACE)
   labels:
     app: ai-streamer
 spec:
-  replicas: 2                       # Adjust replicas as needed
+  replicas: 3                    # Adjust replica count as needed
   selector:
     matchLabels:
       app: ai-streamer
@@ -19,21 +19,24 @@ spec:
         app: ai-streamer
     spec:
       containers:
-      - name: ai-streamer           # (Matches CONTAINER_NAME in your workflows)
+      - name: ai-streamer         # Use this as your CONTAINER_NAME
         image: 038462756156.dkr.ecr.us-east-1.amazonaws.com/ai-streamer:latest
         imagePullPolicy: Always
         ports:
-        - containerPort: 5000       # The port your Flask app listens on
+        - containerPort: 3000     # React frontend port
+          name: frontend-port
+        - containerPort: 5000     # Flask backend port
+          name: backend-port
         resources:
           requests:
             cpu: "500m"
-            memory: "4Gi"           # Good baseline for memory-intensive apps
+            memory: "4Gi"
           limits:
             cpu: "1"
             memory: "8Gi"
         livenessProbe:
           httpGet:
-            path: /health           # Ensure your app provides a /health endpoint
+            path: /health         # Your Flask backend should expose a /health endpoint
             port: 5000
           initialDelaySeconds: 30
           periodSeconds: 10
@@ -47,25 +50,27 @@ spec:
 
 ---
 # ---------------------------------------
-# Service: Expose Application with a Static IP
+# Service: Expose Application with Static Elastic IP
 # ---------------------------------------
 apiVersion: v1
 kind: Service
 metadata:
   name: ai-streamer-service
   namespace: default
-  labels:
-    app: ai-streamer
   annotations:
-    # Use an NLB so that you can assign a static Elastic IP
     service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
-    # Replace the placeholder below with your Elastic IP allocation ID (not the IP address)
+    # Replace the placeholder with your actual Elastic IP allocation ID
     service.beta.kubernetes.io/aws-load-balancer-eip-allocations: "eipalloc-0195006ff85a2aa7b"
 spec:
   type: LoadBalancer
-  ports:
-  - port: 80                      # External port (adjust as needed)
-    targetPort: 5000              # Container port (your Flask app)
-    protocol: TCP
   selector:
     app: ai-streamer
+  ports:
+  - name: frontend
+    port: 80                 # Externally accessible port for React frontend
+    targetPort: 3000         # Container port for React frontend
+    protocol: TCP
+  - name: backend
+    port: 81                 # Externally accessible port for Flask backend
+    targetPort: 5000         # Container port for Flask backend
+    protocol: TCP

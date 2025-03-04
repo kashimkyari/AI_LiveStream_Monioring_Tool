@@ -1,7 +1,9 @@
 #!/bin/sh
-# Start the React frontend in the background
+# Start the React frontend (runs on port 3000)
 cd /app/frontend && npm start &
-# Wait a few seconds to allow the frontend to initialize
+
+# Optionally, wait a few seconds for the frontend to initialize
 sleep 5
-# Start the Flask backend
+
+# Start the Flask backend (runs on port 5000)
 cd /app/backend && python app.py

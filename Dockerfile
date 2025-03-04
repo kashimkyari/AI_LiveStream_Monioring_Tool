@@ -1,9 +1,11 @@
-# ---------- Backend Stage (Flask) ----------
+# --------------------------
+# Stage 1: Build Flask Backend
+# --------------------------
 FROM python:3.9 AS backend
 
 WORKDIR /app/backend
 
-# Install system dependencies needed for Python packages and OpenCV
+# Install system dependencies needed for Python packages and OpenCV support
 RUN apt-get update && apt-get install -y \
     gcc \
     g++ \
@@ -14,34 +16,39 @@ RUN apt-get update && apt-get install -y \
     libssl-dev \
     libgl1-mesa-glx
 
-# Copy and install backend dependencies
+# Copy requirements and install Python dependencies
 COPY backend/requirements.txt .
 RUN pip install --upgrade pip
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Download spaCy model (adjust if you use a different model)
+# Download the spaCy English model (if your app uses it)
 RUN python -m spacy download en_core_web_sm
 
-# Copy the backend source code
-COPY backend .
+# Copy the rest of the backend source code (including app.py)
+COPY backend/ .
 
 EXPOSE 5000
 
-# ---------- Frontend Stage (React) ----------
+# --------------------------
+# Stage 2: Build React Frontend
+# --------------------------
 FROM node:18 AS frontend
 
 WORKDIR /app/frontend
 
-# Copy package manifests and install frontend dependencies
+# Copy package manifests and install dependencies
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm install
 
 # Copy the rest of the frontend source code
-COPY frontend .
+COPY frontend/ .
 
-# (For development purposes, we run the frontend without building a production bundle)
+# (We are using 'npm start' so no production build is performed here)
+EXPOSE 3000
 
-# ---------- Final Stage (Run Both Processes) ----------
+# --------------------------
+# Stage 3: Final Stage - Combine and Run Both
+# --------------------------
 FROM node:18 AS final
 
 # Install Python runtime
@@ -53,11 +60,10 @@ WORKDIR /app
 COPY --from=backend /app/backend /app/backend
 COPY --from=frontend /app/frontend /app/frontend
 
-# Copy an entrypoint script to run both processes
+# Copy entrypoint script that starts both servers
 COPY start.sh /app/start.sh
 RUN chmod +x /app/start.sh
 
-# Expose ports (backend on 5000 and frontend on 3000)
 EXPOSE 5000 3000
 
 CMD ["/app/start.sh"]
