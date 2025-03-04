@@ -3,7 +3,7 @@ name: Deploy to AWS ECR
 on:
   push:
     branches:
-      - main  # Triggers on push to main branch
+      - main  # Trigger on push to main branch
 
 jobs:
   deploy:
@@ -34,11 +34,11 @@ jobs:
           ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
           IMAGE_TAG: latest
         run: |
-          docker build -t $ECR_REPOSITORY .
+          docker build --no-cache -t $ECR_REPOSITORY .
           docker tag $ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
 
-      # Optional: Deploy to AWS ECS by forcing a new deployment
+      # Optional: Force a new deployment on AWS ECS
       - name: Update ECS Service (Optional)
         run: |
           aws ecs update-service --cluster my-cluster --service my-service --force-new-deployment

@@ -3,7 +3,7 @@ FROM python:3.9 AS backend
 
 WORKDIR /app/backend
 
-# Install system dependencies required for building Python packages and for OpenCV support
+# Install system dependencies required for building Python packages and OpenCV support
 RUN apt-get update && apt-get install -y \
     gcc \
     g++ \
@@ -25,7 +25,7 @@ RUN python -m spacy download en_core_web_sm
 # Copy the backend source code
 COPY backend .
 
-# Expose Flask's default port
+# Expose Flask's port
 EXPOSE 5000
 
 # ---------- Frontend Stage (React) ----------
@@ -40,23 +40,26 @@ RUN npm install
 # Copy the rest of the frontend source code
 COPY frontend .
 
-# Build the React app
-RUN npm run build
+# ---------- Final Stage (Run Both Processes) ----------
+FROM node:18 AS final
 
-# ---------- Final Stage (Combine and Serve) ----------
-FROM python:3.9 AS final
+# Install Python 3 and pip
+RUN apt-get update && apt-get install -y python3 python3-pip
 
 WORKDIR /app
 
 # Copy the backend from the backend stage
 COPY --from=backend /app/backend /app/backend
 
-# Copy the React build into the backend's static folder for serving
-COPY --from=frontend /app/frontend/build /app/backend/static
+# Copy the frontend from the frontend stage
+COPY --from=frontend /app/frontend /app/frontend
 
-# Set environment variables for Flask
-ENV FLASK_APP=backend/app.py
-ENV FLASK_RUN_HOST=0.0.0.0
+# Copy entrypoint script
+COPY start.sh /app/start.sh
+RUN chmod +x /app/start.sh
 
-# Start the Flask application
-CMD ["python", "backend/app.py"]
+# Expose ports for backend and frontend
+EXPOSE 5000 3000
+
+# Start both frontend and backend
+CMD ["/app/start.sh"]
