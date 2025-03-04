@@ -38,8 +38,10 @@ const AdminPanel = ({ activeTab }) => {
   const [detectionAlerts, setDetectionAlerts] = useState({});
   const [lastNotification, setLastNotification] = useState(0);
   const [showAgentModal, setShowAgentModal] = useState(false);
+  const [telegramRecipients, setTelegramRecipients] = useState([]);
+  const [newTelegramUsername, setNewTelegramUsername] = useState('');
+  const [newTelegramChatId, setNewTelegramChatId] = useState('');
 
-  // Data fetching functions
   const fetchDashboard = async () => {
     try {
       const res = await axios.get('/api/dashboard');
@@ -93,7 +95,15 @@ const AdminPanel = ({ activeTab }) => {
     }
   };
 
-  // Real-time detection handler
+  const fetchTelegramRecipients = async () => {
+    try {
+      const res = await axios.get('/api/telegram_recipients');
+      setTelegramRecipients(res.data);
+    } catch (error) {
+      console.error('Error fetching Telegram recipients:', error);
+    }
+  };
+
   useEffect(() => {
     const eventSource = new EventSource('/api/detection-events');
     
@@ -105,7 +115,6 @@ const AdminPanel = ({ activeTab }) => {
           [data.stream_url]: data.detections
         }));
 
-        // Show browser notification
         if (data.detections?.length > 0 && Date.now() - lastNotification > 60000) {
           const detectedItems = data.detections.map(d => d.class).join(', ');
           if (Notification.permission === 'granted') {
@@ -126,14 +135,12 @@ const AdminPanel = ({ activeTab }) => {
     return () => eventSource.close();
   }, [lastNotification]);
 
-  // Request notification permissions
   useEffect(() => {
     if (Notification.permission !== 'granted') {
       Notification.requestPermission();
     }
   }, []);
 
-  // Handler functions
   const handleAssign = async () => {
     if (!selectedAgentId || !selectedStreamId) {
       alert('Both Agent and Stream must be selected.');
@@ -316,6 +323,29 @@ const AdminPanel = ({ activeTab }) => {
     }
   };
 
+  const handleCreateTelegramRecipient = async () => {
+    try {
+      await axios.post('/api/telegram_recipients', {
+        telegram_username: newTelegramUsername,
+        chat_id: newTelegramChatId
+      });
+      fetchTelegramRecipients();
+      setNewTelegramUsername('');
+      setNewTelegramChatId('');
+    } catch (error) {
+      console.error('Error adding recipient:', error);
+    }
+  };
+
+  const handleDeleteTelegramRecipient = async (recipientId) => {
+    try {
+      await axios.delete(`/api/telegram_recipients/${recipientId}`);
+      fetchTelegramRecipients();
+    } catch (error) {
+      console.error('Error deleting recipient:', error);
+    }
+  };
+
   useEffect(() => {
     if (activeTab === 'dashboard') {
       fetchDashboard();
@@ -334,6 +364,7 @@ const AdminPanel = ({ activeTab }) => {
     if (activeTab === 'flag') {
       fetchKeywords();
       fetchObjects();
+      fetchTelegramRecipients();
     }
   }, [activeTab]);
 
@@ -358,6 +389,17 @@ const AdminPanel = ({ activeTab }) => {
                   {(detectionAlerts[stream.room_url]?.length > 0) && (
                     <div className="detection-alert-badge">
                       {detectionAlerts[stream.room_url].length} DETECTIONS
+                      <div className="detection-preview">
+                        <img 
+                          src={detectionAlerts[stream.room_url][0].image_url} 
+                          alt="Detection preview" 
+                          className="preview-image"
+                        />
+                        <div className="detection-info">
+                          <span>{detectionAlerts[stream.room_url][0].class} </span>
+                          <span>({(detectionAlerts[stream.room_url][0].confidence * 100).toFixed(1)}%)</span>
+                        </div>
+                      </div>
                     </div>
                   )}
                   <div className="assignment-details">
@@ -553,6 +595,47 @@ const AdminPanel = ({ activeTab }) => {
                     <td>
                       <button onClick={() => handleUpdateObject(obj.id, obj.object_name)}>Edit</button>
                       <button onClick={() => handleDeleteObject(obj.id)}>Delete</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="flag-section">
+            <h4>Telegram Notifications</h4>
+            <div className="form-container">
+              <input
+                type="text"
+                placeholder="Telegram Username"
+                value={newTelegramUsername}
+                onChange={(e) => setNewTelegramUsername(e.target.value)}
+              />
+              <input
+                type="text"
+                placeholder="Chat ID"
+                value={newTelegramChatId}
+                onChange={(e) => setNewTelegramChatId(e.target.value)}
+              />
+              <button onClick={handleCreateTelegramRecipient}>Add Recipient</button>
+            </div>
+            <table>
+              <thead>
+                <tr>
+                  <th>Username</th>
+                  <th>Chat ID</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {telegramRecipients.map((recipient) => (
+                  <tr key={recipient.id}>
+                    <td>{recipient.telegram_username}</td>
+                    <td>{recipient.chat_id}</td>
+                    <td>
+                      <button onClick={() => handleDeleteTelegramRecipient(recipient.id)}>
+                        Delete
+                      </button>
                     </td>
                   </tr>
                 ))}
@@ -917,6 +1000,52 @@ const AdminPanel = ({ activeTab }) => {
         .modal-content .form-container input {
           width: 100%;
           margin-bottom: 10px;
+        }
+
+        .notifications-list {
+          max-height: 60vh;
+          overflow-y: auto;
+        }
+
+        .notification-item {
+          padding: 12px;
+          margin-bottom: 8px;
+          background: #252525;
+          border-radius: 8px;
+          border-left: 4px solid #007bff;
+        }
+
+        .notification-timestamp {
+          font-size: 0.8em;
+          color: #888;
+          margin-top: 4px;
+        }
+
+        .detection-preview {
+          position: absolute;
+          top: 100%;
+          right: 0;
+          width: 200px;
+          background: #2d2d2d;
+          border-radius: 8px;
+          padding: 8px;
+          display: none;
+          z-index: 1000;
+        }
+
+        .detection-alert-badge:hover .detection-preview {
+          display: block;
+        }
+
+        .preview-image {
+          width: 100%;
+          border-radius: 4px;
+          margin-bottom: 4px;
+        }
+
+        .detection-info {
+          font-size: 0.8em;
+          text-align: center;
         }
 
         @media (max-width: 768px) {

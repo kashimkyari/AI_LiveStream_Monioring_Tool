@@ -10,12 +10,17 @@ function App() {
   const [unreadCount, setUnreadCount] = useState(0);
   const [toast, setToast] = useState(null);
   const [notifications, setNotifications] = useState([]);
+  const [dashboardData, setDashboardData] = useState({ streams: [] });
 
   const checkSession = async () => {
     try {
       const res = await axios.get('/api/session');
       if (res.data.logged_in) {
         setRole(res.data.user.role);
+        if (res.data.user.role === 'admin') {
+          const dashboardRes = await axios.get('/api/dashboard');
+          setDashboardData(dashboardRes.data);
+        }
       }
     } catch (error) {
       console.log("No active session.");
@@ -34,15 +39,39 @@ function App() {
     eventSource.onmessage = (e) => {
       const data = JSON.parse(e.data);
       if (data.type === 'detection') {
-        // Build a notification message using the backend's payload:
-        // data.object (detected object), data.confidence, and data.stream.
-        const notificationMessage = `🚨 Detected ${data.object} (Confidence: ${data.confidence}) in ${data.stream}`;
+        const stream = dashboardData.streams.find(s => s.room_url === data.stream);
+        const agentName = stream?.agent?.username || 'Unassigned';
+        const notificationMessage = `🚨 Detected ${data.object} (${(data.confidence * 100).toFixed(1)}%) in ${stream?.streamer_username || 'Unknown'}`;
+        
         setUnreadCount(prev => prev + 1);
         setToast({
           message: notificationMessage,
-          type: 'alert'
+          type: 'alert',
+          image: data.image_url,
+          details: {
+            stream: stream?.id || 'N/A',
+            agent: agentName,
+            model: stream?.streamer_username || 'Unknown',
+            confidence: `${(data.confidence * 100).toFixed(1)}%`
+          }
         });
-        setNotifications(prev => [...prev, { id: data.id, message: notificationMessage }]);
+
+        setNotifications(prev => [
+          { 
+            id: data.id, 
+            message: notificationMessage,
+            timestamp: new Date().toLocaleString(),
+            image: data.image_url,
+            details: {
+              stream: stream?.id || 'N/A',
+              agent: agentName,
+              model: stream?.streamer_username || 'Unknown',
+              confidence: `${(data.confidence * 100).toFixed(1)}%`
+            }
+          }, 
+          ...prev
+        ]);
+        
         setTimeout(() => setToast(null), 5000);
       }
     };
@@ -53,10 +82,13 @@ function App() {
     };
 
     return () => eventSource.close();
-  }, [role]);
+  }, [role, dashboardData.streams]);
 
   const handleLogin = (role) => {
     setRole(role);
+    if (role === 'admin') {
+      axios.get('/api/dashboard').then(res => setDashboardData(res.data));
+    }
   };
 
   const handleLogout = async () => {
@@ -109,11 +141,30 @@ function App() {
             {notifications.length === 0 ? (
               <p>No notifications yet.</p>
             ) : (
-              notifications.map(note => (
-                <div key={note.id} className="notification-item">
-                  {note.message}
-                </div>
-              ))
+              <div className="notifications-list">
+                {notifications.map(note => (
+                  <div key={note.id} className="notification-item">
+                    <div className="notification-header">
+                      <div className="notification-message">{note.message}</div>
+                      <div className="notification-timestamp">{note.timestamp}</div>
+                    </div>
+                    {note.image && (
+                      <img 
+                        src={note.image} 
+                        alt="Detection" 
+                        className="notification-image"
+                      />
+                    )}
+                    <div className="notification-details">
+                      {Object.entries(note.details).map(([key, value]) => (
+                        <div key={key} className="detail-item">
+                          <strong>{key}:</strong> {value}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
             )}
           </div>
         )}
@@ -121,7 +172,23 @@ function App() {
 
       {toast && (
         <div className={`toast ${toast.type}`}>
-          {toast.message}
+          {toast.image && (
+            <img 
+              src={toast.image} 
+              alt="Detection" 
+              className="toast-image"
+            />
+          )}
+          <div className="toast-content">
+            <div className="toast-message">{toast.message}</div>
+            <div className="toast-details">
+              {Object.entries(toast.details).map(([key, value]) => (
+                <div key={key} className="detail-item">
+                  <strong>{key}:</strong> {value}
+                </div>
+              ))}
+            </div>
+          </div>
           <div className="toast-progress" />
         </div>
       )}
@@ -251,12 +318,45 @@ function App() {
           margin-top: 20px;
         }
 
+        .notifications-list {
+          max-height: 60vh;
+          overflow-y: auto;
+        }
+
         .notification-item {
           padding: 12px;
-          border-bottom: 1px solid #2d2d2d;
+          margin-bottom: 8px;
+          background: #252525;
+          border-radius: 8px;
+          border-left: 4px solid #007bff;
         }
-        .notification-item:last-child {
-          border-bottom: none;
+
+        .notification-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 8px;
+        }
+
+        .notification-timestamp {
+          font-size: 0.8em;
+          color: #888;
+        }
+
+        .notification-image {
+          width: 100%;
+          max-width: 200px;
+          margin-top: 8px;
+          border-radius: 4px;
+        }
+
+        .notification-details {
+          margin-top: 8px;
+          font-size: 0.9em;
+        }
+
+        .detail-item {
+          margin: 4px 0;
         }
 
         .toast {
@@ -273,10 +373,26 @@ function App() {
           align-items: center;
           gap: 12px;
           z-index: 2000;
+          max-width: 400px;
         }
 
         .toast.alert {
           border-left: 4px solid #ff4444;
+        }
+
+        .toast-image {
+          width: 80px;
+          height: 60px;
+          border-radius: 4px;
+        }
+
+        .toast-content {
+          flex: 1;
+        }
+
+        .toast-details {
+          font-size: 0.9em;
+          margin-top: 8px;
         }
 
         .toast-progress {
@@ -321,10 +437,20 @@ function App() {
           .logout-button {
             padding: 8px 16px;
           }
+
+          .toast {
+            max-width: 300px;
+            padding: 12px;
+            flex-direction: column;
+          }
+
+          .toast-image {
+            width: 100%;
+            height: auto;
+          }
         }
       `}</style>
     </div>
   );
 }
-
 export default App;

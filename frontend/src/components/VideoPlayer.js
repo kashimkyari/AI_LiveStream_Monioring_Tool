@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
 
-const VideoPlayer = ({ streamer_username, thumbnail = false, alerts = [] }) => {
+const VideoPlayer = ({ streamer_username, thumbnail = false, alerts = [], platform = 'cbxyz' }) => {
   const [thumbnailError, setThumbnailError] = useState(false);
   const [visibleAlerts, setVisibleAlerts] = useState([]);
   const [currentFrame, setCurrentFrame] = useState(null);
@@ -30,9 +30,16 @@ const VideoPlayer = ({ streamer_username, thumbnail = false, alerts = [] }) => {
     try {
       detectionActive.current = true;
       const timestamp = Date.now();
-      const res = await fetch(
-        `https://jpeg.live.mmcdn.com/stream?room=${streamer_username}&t=${timestamp}`
-      );
+      
+      // Use different thumbnail endpoints based on platform
+      let thumbnailUrl;
+      if (platform.toLowerCase() === 'stripchat') {
+        thumbnailUrl = `https://img.strpst.com/thumbs/${streamer_username}?t=${timestamp}`;
+      } else {
+        thumbnailUrl = `https://jpeg.live.mmcdn.com/stream?room=${streamer_username}&t=${timestamp}`;
+      }
+      
+      const res = await fetch(thumbnailUrl);
       
       if (!res.ok) throw new Error('Stream offline');
       
@@ -55,7 +62,7 @@ const VideoPlayer = ({ streamer_username, thumbnail = false, alerts = [] }) => {
     } finally {
       detectionActive.current = false;
     }
-  }, [isOnline, streamer_username, thumbnail, detectObjects]);
+  }, [isOnline, streamer_username, thumbnail, detectObjects, platform]);
 
   const handleOfflineState = (error) => {
     console.error('Stream offline:', error);
@@ -89,6 +96,36 @@ const VideoPlayer = ({ streamer_username, thumbnail = false, alerts = [] }) => {
     return () => clearTimeout(timeout);
   }, [alerts, detections]);
 
+  const renderEmbeddedPlayer = () => {
+    if (platform.toLowerCase() === 'stripchat') {
+      return (
+        <div className="embedded-player-container">
+          <iframe
+            src={`https://stripchat.com/embed/${streamer_username}`}
+            className="embedded-player"
+            allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
+            allowFullScreen
+            frameBorder="0"
+            scrolling="no"
+          />
+        </div>
+      );
+    } else {
+      return (
+        <div className="embedded-player-container">
+          <iframe
+            src={`https://cbxyz.com/in/?tour=SHBY&campaign=GoTLr&track=embed&room=${streamer_username}`}
+            className="embedded-player"
+            allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
+            allowFullScreen
+            frameBorder="0"
+            scrolling="no"
+          />
+        </div>
+      );
+    }
+  };
+
   return (
     <div className="video-container">
       {thumbnail ? (
@@ -107,16 +144,7 @@ const VideoPlayer = ({ streamer_username, thumbnail = false, alerts = [] }) => {
           )}
         </div>
       ) : (
-        <div className="embedded-player-container">
-          <iframe
-            src={`https://cbxyz.com/in/?tour=SHBY&campaign=GoTLr&track=embed&room=${streamer_username}`}
-            className="embedded-player"
-            allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
-            allowFullScreen
-            frameBorder="0"
-            scrolling="no"
-          />
-        </div>
+        renderEmbeddedPlayer()
       )}
 
       <div className="detection-overlay">
