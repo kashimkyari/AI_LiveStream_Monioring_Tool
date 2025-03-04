@@ -8,10 +8,13 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+
     steps:
+      # Step 1: Check out the repository
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # Step 2: Configure AWS credentials
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v2
         with:
@@ -19,16 +22,22 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
 
+      # Step 3: Wait for the EKS cluster to be active
       - name: Wait for EKS cluster to be active
         run: |
           aws eks wait cluster-active --name ${{ secrets.EKS_CLUSTER }} --region ${{ secrets.AWS_REGION }}
 
+      # Step 4: Update kubeconfig so kubectl can communicate with your EKS cluster
       - name: Update kubeconfig
         run: |
           aws eks update-kubeconfig --name ${{ secrets.EKS_CLUSTER }} --region ${{ secrets.AWS_REGION }}
 
+      # Step 5: Patch the deployment with the latest image from ECR
       - name: Update Kubernetes Deployment Image
         run: |
           IMAGE_URI=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/${{ secrets.ECR_REPOSITORY }}:latest
           echo "Deploying image: $IMAGE_URI"
-          kubectl set image deployment/${{ secrets.EKS_DEPLOYMENT }} ${{ secrets.CONTAINER_NAME }}=$IMAGE_URI --namespace ${{ secrets.EKS_NAMESPACE }}
+          echo "Deployment: ${{ secrets.EKS_DEPLOYMENT }}"
+          echo "Container: ${{ secrets.CONTAINER_NAME }}"
+          echo "Namespace: ${{ secrets.EKS_NAMESPACE }}"
+          kubectl set image deployment/${{ secrets.EKS_DEPLOYMENT }} "${{ secrets.CONTAINER_NAME }}=$IMAGE_URI" --namespace ${{ secrets.EKS_NAMESPACE }}
