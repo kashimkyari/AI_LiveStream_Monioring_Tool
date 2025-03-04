@@ -1,0 +1,20 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: my-app-deployment        # This is your EKS_DEPLOYMENT value
+  namespace: default             # Or your chosen namespace (EKS_NAMESPACE)
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: my-app
+  template:
+    metadata:
+      labels:
+        app: my-app
+    spec:
+      containers:
+        - name: my-app-container # This is your CONTAINER_NAME value
+          image: 038462756156.dkr.ecr.us-east-1.amazonaws.com/my-ecr-repo:latest
+          ports:
+            - containerPort: 3000  # Adjust if your container listens on different ports

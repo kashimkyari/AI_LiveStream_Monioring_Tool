@@ -1,20 +1,17 @@
-name: Deploy to AWS ECR
+name: Build and Push to ECR
 
 on:
   push:
     branches:
-      - main  # Trigger on push to main branch
+      - main
 
 jobs:
-  deploy:
+  build-and-push:
     runs-on: ubuntu-latest
-
     steps:
-      # Checkout the repository
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Configure AWS credentials
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v2
         with:
@@ -22,18 +19,15 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
 
-      # Login to Amazon ECR
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v1
 
-      # Create ECR repository if it doesn't exist
       - name: Create ECR repository if not exists
         run: |
           aws ecr describe-repositories --repository-names ${{ secrets.ECR_REPOSITORY }} || \
           aws ecr create-repository --repository-name ${{ secrets.ECR_REPOSITORY }}
 
-      # Build, tag, and push the Docker image to ECR
       - name: Build, tag, and push image to ECR
         env:
           ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
@@ -43,5 +37,3 @@ jobs:
           docker build --no-cache -t $ECR_REPOSITORY .
           docker tag $ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-
-     
