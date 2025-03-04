@@ -3,18 +3,18 @@ name: Deploy to AWS ECR
 on:
   push:
     branches:
-      - main  # Runs when code is pushed to main
+      - main  # Triggers on push to main branch
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
     steps:
-      # Checkout code
+      # Checkout the repository
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Set up AWS credentials
+      # Configure AWS credentials
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v2
         with:
@@ -27,7 +27,7 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v1
 
-      # Build, tag, and push the Docker image
+      # Build, tag, and push the Docker image to ECR
       - name: Build, tag, and push image to ECR
         env:
           ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
@@ -38,7 +38,7 @@ jobs:
           docker tag $ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
 
-      # Deploy to AWS ECS (Optional)
-      - name: Update ECS Service
+      # Optional: Deploy to AWS ECS by forcing a new deployment
+      - name: Update ECS Service (Optional)
         run: |
           aws ecs update-service --cluster my-cluster --service my-service --force-new-deployment
