@@ -38,6 +38,6 @@ jobs:
           IMAGE_URI=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/${{ secrets.ECR_REPOSITORY }}:latest
           echo "Deploying image: $IMAGE_URI"
           echo "Deployment: ${{ secrets.EKS_DEPLOYMENT }}"
-          echo "Container: ${{ secrets.CONTAINER_NAME }}"
           echo "Namespace: ${{ secrets.EKS_NAMESPACE }}"
+          kubectl get deployments --namespace ${{ secrets.EKS_NAMESPACE }}
           kubectl set image deployment/${{ secrets.EKS_DEPLOYMENT }} "${{ secrets.CONTAINER_NAME }}=$IMAGE_URI" --namespace ${{ secrets.EKS_NAMESPACE }}
