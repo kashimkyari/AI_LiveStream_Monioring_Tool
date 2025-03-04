@@ -44,7 +44,4 @@ jobs:
           docker tag $ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
 
-      # Optional: Force a new deployment on AWS ECS
-      - name: Update ECS Service (Optional)
-        run: |
-          aws ecs update-service --cluster my-cluster --service my-service --force-new-deployment
+     
