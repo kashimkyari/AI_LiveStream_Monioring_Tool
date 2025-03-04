@@ -3,11 +3,15 @@ FROM python:3.9 AS backend
 
 WORKDIR /app/backend
 
+# Install system dependencies
+RUN apt-get update && apt-get install -y gcc g++ python3-dev libpq-dev
+
 # Copy and install dependencies
 COPY backend/requirements.txt .
+RUN pip install --upgrade pip
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the rest of the backend code
+# Copy the backend code
 COPY backend .
 
 # Expose Flask's default port
@@ -36,12 +40,12 @@ WORKDIR /app
 # Copy backend from the previous stage
 COPY --from=backend /app/backend /app/backend
 
-# Copy frontend build to serve it with Flask
+# Copy frontend build to backend/static
 COPY --from=frontend /app/frontend/build /app/backend/static
 
-# Set environment variables for Flask
+# Set environment variables
 ENV FLASK_APP=backend/app.py
 ENV FLASK_RUN_HOST=0.0.0.0
 
-# Start the backend (which serves the frontend)
+# Run the Flask app
 CMD ["python", "backend/app.py"]
