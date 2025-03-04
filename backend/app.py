@@ -1,9 +1,13 @@
+#!/usr/bin/env python
+# This is the full updated app.py with fancy annotated detection images sent via Telegram.
+
 import os
 import sys
 import json
 import threading
 import time
 import random
+import asyncio
 import spacy
 import cv2
 import torch
@@ -29,32 +33,135 @@ import shutil
 from collections import defaultdict
 from spacy.matcher import Matcher
 from telegram import Bot
-from sqlalchemy import text
-import asyncio
 
 # =============================================================================
 # Configuration & Initialization
 # =============================================================================
 
-# Telegram Bot initialization (using synchronous calls)
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "8175749575:AAGWrWMrqzQkDP8bkKe3gafC42r_Ridr0gY")
-bot = Bot(token=TELEGRAM_TOKEN)
+# Retrieve Telegram token from environment.
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "AAGWrWMrqzQkDP8bkKe3gafC42r_Ridr0gY")
+# Removed global bot initialization to ensure we always use the current token.
 
-# Allowed file types for video uploads
+def get_bot(token=None):
+    """
+    Returns a new instance of telegram.Bot using the provided token.
+    If no token is provided, it retrieves the token from the environment.
+    """
+    if token is None:
+        token = os.getenv("TELEGRAM_TOKEN", "AAGWrWMrqzQkDP8bkKe3gafC42r_Ridr0gY")
+    return Bot(token=token)
+
+def send_text_message(msg, chat_id, token=None):
+    """
+    Send a plain text message using Telegram.
+    """
+    bot_instance = get_bot(token)
+    bot_instance.sendMessage(chat_id=chat_id, text=msg)
+
+# Allowed file types for video uploads.
 ALLOWED_EXTENSIONS = {'mp4', 'avi', 'mov'}
 
-# Global variables for duplicate telegram notifications
-notification_lock = threading.Lock()
-last_notification_times = {}
+# =============================================================================
+# Telegram Notification Functions with Fancy Annotations
+# =============================================================================
 
-# Global flags for monitoring threads (only active when a user/admin is logged in)
-monitoring_enabled = False
-monitoring_threads_started = False
-notification_monitor_started = False
+async def send_full_telegram_notification(log, detections):
+    """
+    Sends a Telegram notification with an annotated image showing all detections.
+    Detections is expected to be a list of dictionaries with keys: 'class', 'confidence', 'box'.
+    """
+    try:
+        room_url = log.room_url
+        streamer = room_url.rstrip('/').split('/')[-1]
+        stream = Stream.query.filter_by(room_url=room_url).first()
+        if stream:
+            platform = stream.platform
+            streamer_name = stream.streamer_username
+            assignment = Assignment.query.filter_by(stream_id=stream.id).first()
+            agent = assignment.agent if assignment else None
+        else:
+            platform = "Unknown"
+            streamer_name = streamer
+            agent = None
 
-# -------------------------------
+        agent_name = f"{agent.firstname} {agent.lastname}" if agent else "None"
+        timestamp = log.timestamp.strftime("%Y-%m-%d %H:%M:%S")
+
+        # Build caption with all detections.
+        caption = "🚨 Detection Alert!\nDetections:\n"
+        for det in detections:
+            caption += f"- {det.get('class', 'object')}: {det.get('confidence', 0):.2f}\n"
+        caption += (f"Streamer: {streamer_name}\n"
+                    f"Platform: {platform}\n"
+                    f"Agent: {agent_name}\n"
+                    f"Timestamp: {timestamp}")
+
+        thumbnail_url = f"https://jpeg.live.mmcdn.com/stream?room={streamer}"
+        response = requests.get(thumbnail_url, stream=True, timeout=128)
+        if response.status_code == 200:
+            image_data = response.content
+            # Convert image data to OpenCV image.
+            nparr = np.frombuffer(image_data, np.uint8)
+            img_cv = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+            # Annotate the image with all detections.
+            for detection in detections:
+                box = detection.get('box')
+                class_name = detection.get('class', 'object')
+                confidence = detection.get('confidence', 0)
+                if box:
+                    x1, y1, x2, y2 = map(int, box)
+                    # Draw rectangle (green).
+                    cv2.rectangle(img_cv, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                    label = "{}: {:.2f}".format(class_name, confidence)
+                    # Get text size for a fancy background.
+                    (w, h), baseline = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)
+                    cv2.rectangle(img_cv, (x1, y1 - h - baseline), (x1 + w, y1), (0, 255, 0), -1)
+                    cv2.putText(img_cv, label, (x1, y1 - baseline), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
+            # Encode the annotated image.
+            retval, buffer = cv2.imencode('.jpg', img_cv)
+            annotated_image_io = BytesIO(buffer.tobytes())
+            annotated_image_io.seek(0)
+            img_io = annotated_image_io
+        else:
+            img_io = thumbnail_url
+
+        # Get a fresh bot instance.
+        bot_instance = get_bot()
+
+        # Notify assigned agent if exists.
+        if agent:
+            agent_recipient = TelegramRecipient.query.filter_by(telegram_username=agent.username).first()
+            if agent_recipient:
+                try:
+                    await bot_instance.send_photo(chat_id=agent_recipient.chat_id, photo=img_io, caption=caption)
+                except Exception as e:
+                    print("Error sending to agent:", e)
+
+        # Notify all admin recipients.
+        admin_recipients = TelegramRecipient.query.all()
+        for recipient in admin_recipients:
+            if agent and recipient.telegram_username == agent.username:
+                continue
+            try:
+                await bot_instance.send_photo(chat_id=recipient.chat_id, photo=img_io, caption=caption)
+            except Exception as e:
+                print("Error sending to admin:", e)
+
+    except Exception as e:
+        print("Notification error:", e)
+
+def send_chat_telegram_notification(image_path, description):
+    try:
+        with open(image_path, "rb") as image_file:
+            # Get a fresh bot instance for sending the chat image.
+            bot_instance = get_bot()
+            bot_instance.send_photo(chat_id=os.getenv("TELEGRAM_CHAT_ID"), photo=image_file, caption=description)
+    except Exception as e:
+        print("Error sending chat telegram notification:", e)
+
+# =============================================================================
 # Database Existence Check
-# -------------------------------
+# =============================================================================
 def ensure_database():
     DB_HOST = os.getenv("DB_HOST", "localhost")
     DB_PORT = os.getenv("DB_PORT", "5432")
@@ -118,7 +225,6 @@ class Stream(db.Model):
     room_url = db.Column(db.String(300), unique=True, nullable=False)
     platform = db.Column(db.String(50), nullable=False, default='Chaturbate')
     streamer_username = db.Column(db.String(100))
-    online = db.Column(db.Boolean, default=True)  # New field to track online status
     assignments = db.relationship('Assignment', back_populates='stream')
 
     def serialize(self):
@@ -126,8 +232,7 @@ class Stream(db.Model):
             'id': self.id,
             'room_url': self.room_url,
             'platform': self.platform,
-            'streamer_username': self.streamer_username,
-            'online': self.online
+            'streamer_username': self.streamer_username
         }
 
 class Assignment(db.Model):
@@ -206,7 +311,7 @@ app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
 }
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SECRET_KEY'] = 'supersecretkey'
-app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(minutes=5)  # Session expires after 5 minutes of inactivity
+app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=7)
 app.config['UPLOAD_FOLDER'] = 'uploads'
 app.config['CHAT_IMAGES_FOLDER'] = os.path.join(app.config['UPLOAD_FOLDER'], 'chat_images')
 app.config['FLAGGED_CHAT_IMAGES_FOLDER'] = os.path.join(app.config['UPLOAD_FOLDER'], 'flagged_chat_images')
@@ -221,18 +326,7 @@ def shutdown_session(exception=None):
 
 with app.app_context():
     db.create_all()
-    # ------------------------------------------------------------------------
-    # Schema update: add "online" column to streams table if it doesn't exist.
-    # ------------------------------------------------------------------------
-    insp = db.inspect(db.engine)
-    stream_columns = [col['name'] for col in insp.get_columns('streams')]
-    if 'online' not in stream_columns:
-        with db.engine.connect() as connection:
-            connection.execute(text("ALTER TABLE streams ADD COLUMN online BOOLEAN DEFAULT TRUE"))
-            connection.commit()
-        print("Added 'online' column to streams table.")
-
-    # Create default admin user if not exists
+    # Create default admin user if not exists.
     if not User.query.filter_by(role='admin').first():
         admin = User(
             username='admin',
@@ -245,7 +339,7 @@ with app.app_context():
         )
         db.session.add(admin)
         db.session.commit()
-    # Optionally create an agent user
+    # Optionally create an agent user.
     if not User.query.filter_by(role='agent').first():
         agent = User(
             username='agent',
@@ -259,7 +353,26 @@ with app.app_context():
         db.session.add(agent)
         db.session.commit()
 
-# Refresh flagged keywords from DB
+# =============================================================================
+# Utility Functions & Decorators
+# =============================================================================
+
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+def login_required(role=None):
+    def decorator(f):
+        @wraps(f)
+        def decorated_function(*args, **kwargs):
+            if 'user_id' not in session:
+                return jsonify({'message': 'Authentication required'}), 401
+            user = db.session.get(User, session['user_id'])
+            if role and (user is None or user.role != role):
+                return jsonify({'message': 'Unauthorized'}), 403
+            return f(*args, **kwargs)
+        return decorated_function
+    return decorator
+
 flagged_keywords = []
 def update_flagged_keywords():
     global flagged_keywords
@@ -269,41 +382,10 @@ def update_flagged_keywords():
 update_flagged_keywords()
 
 # =============================================================================
-# Utility Functions & Decorators
-# =============================================================================
-
-def allowed_file(filename):
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
-
-# Strict login: only allow if a user is logged in and has role 'admin' or 'agent'
-def login_required(role=None):
-    def decorator(f):
-        @wraps(f)
-        def decorated_function(*args, **kwargs):
-            if 'user_id' not in session:
-                return jsonify({'message': 'Authentication required'}), 401
-            user = db.session.get(User, session['user_id'])
-            if user is None or user.role not in ['admin', 'agent']:
-                return jsonify({'message': 'Unauthorized'}), 403
-            if role and user.role != role:
-                return jsonify({'message': 'Unauthorized'}), 403
-            return f(*args, **kwargs)
-        return decorated_function
-    return decorator
-
-# =============================================================================
-# Session Refresh on Each Request
-# =============================================================================
-@app.before_request
-def refresh_session():
-    session.permanent = True
-    session.modified = True
-
-# =============================================================================
 # Detection Functions
 # =============================================================================
 
-# Load spaCy model and initialize matcher
+# Load spaCy model and initialize matcher.
 nlp = spacy.load("en_core_web_sm")
 matcher = Matcher(nlp.vocab)
 
@@ -317,7 +399,10 @@ def refresh_keywords():
         matcher.add(word, [pattern])
 
 def detect_chat(stream_url=""):
-    # For demonstration; replace with real chat text
+    """
+    A simple chat detection using spaCy matcher.
+    This example uses a sample message; replace with actual chat text.
+    """
     refresh_keywords()
     sample_message = "Sample chat message containing flagged keywords"
     doc = nlp(sample_message.lower())
@@ -335,7 +420,7 @@ def detect_chat(stream_url=""):
         }
     return {'status': 'clean'}
 
-# Load YOLOv8 model for visual detection
+# Load YOLOv8 model for visual detection.
 model = YOLO("yolov8s.pt")
 flagged_objects = []
 
@@ -357,6 +442,7 @@ def detect_frame(frame):
         for detection in boxes:
             x1, y1, x2, y2, conf, cls = detection
             class_id = int(cls)
+            # Handle model.names as dict or list.
             if isinstance(model.names, dict):
                 class_name = model.names.get(class_id, "unknown").lower()
             else:
@@ -371,143 +457,41 @@ def detect_frame(frame):
     return detections
 
 # =============================================================================
-# Telegram Notification Functions (synchronous calls)
-# =============================================================================
-
-def send_full_telegram_notification(log, detection):
-    try:
-        # Remove throttling for aggressive notifications
-
-        room_url = log.room_url
-        streamer = room_url.rstrip('/').split('/')[-1]
-        stream = Stream.query.filter_by(room_url=room_url).first()
-        if stream:
-            platform = stream.platform
-            streamer_name = stream.streamer_username
-            assignment = Assignment.query.filter_by(stream_id=stream.id).first()
-            agent = assignment.agent if assignment else None
-        else:
-            platform = "Unknown"
-            streamer_name = streamer
-            agent = None
-
-        agent_name = f"{agent.firstname} {agent.lastname}" if agent else "None"
-        timestamp = log.timestamp.strftime("%Y-%m-%d %H:%M:%S")
-
-        # Open and annotate the detection image with bounding box and label
-        detection_image_path = log.details.get("image_path")
-        if detection_image_path and os.path.exists(detection_image_path):
-            image = Image.open(detection_image_path).convert("RGB")
-            # Resize image to 640x480 for consistency
-            image = image.resize((640, 480))
-            draw = ImageDraw.Draw(image)
-            box = detection.get('box')  # Expected format: [x1, y1, x2, y2]
-            if box:
-                # Draw bounding box in red with a width of 3 pixels
-                draw.rectangle(box, outline="red", width=3)
-                # Prepare label text with class and confidence
-                label = f"{detection.get('class')} ({detection.get('confidence'):.2f})"
-                try:
-                    font = ImageFont.truetype("arial.ttf", 16)
-                except Exception:
-                    font = ImageFont.load_default()
-                text_size = draw.textsize(label, font=font)
-                # Draw a filled rectangle behind the text for readability
-                text_origin = (box[0], max(box[1] - text_size[1], 0))
-                draw.rectangle([text_origin, (text_origin[0] + text_size[0], text_origin[1] + text_size[1])], fill="red")
-                draw.text(text_origin, label, fill="white", font=font)
-            annotated_io = BytesIO()
-            image.save(annotated_io, format="JPEG")
-            annotated_io.seek(0)
-        else:
-            annotated_io = None
-
-        caption = (
-            f"🚨 Detection Alert!\n"
-            f"Object: {detection.get('class')}\n"
-            f"Confidence: {detection.get('confidence'):.2f}\n"
-            f"Streamer: {streamer_name}\n"
-            f"Platform: {platform}\n"
-            f"Agent: {agent_name}\n"
-            f"Timestamp: {timestamp}"
-        )
-
-        tasks = []
-        # Notify assigned agent if one exists
-        if agent:
-            agent_recipient = TelegramRecipient.query.filter_by(telegram_username=agent.username).first()
-            if agent_recipient:
-                if annotated_io:
-                    annotated_io.seek(0)
-                    tasks.append(bot.send_photo(chat_id=agent_recipient.chat_id, photo=annotated_io, caption=caption))
-                else:
-                    tasks.append(bot.send_message(chat_id=agent_recipient.chat_id, text=caption))
-
-        # Notify all admin recipients (excluding the agent if already notified)
-        admin_recipients = TelegramRecipient.query.all()
-        for recipient in admin_recipients:
-            if agent and recipient.telegram_username == agent.username:
-                continue
-            if annotated_io:
-                annotated_io.seek(0)
-                tasks.append(bot.send_photo(chat_id=recipient.chat_id, photo=annotated_io, caption=caption))
-            else:
-                tasks.append(bot.send_message(chat_id=recipient.chat_id, text=caption))
-
-        # Run all telegram tasks concurrently using a new asyncio event loop
-        if tasks:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            loop.run_until_complete(asyncio.gather(*tasks))
-            loop.close()
-
-    except Exception as e:
-        print(f"Notification error: {str(e)}")
-
-def send_chat_telegram_notification(image_path, description):
-    try:
-        with open(image_path, "rb") as image_file:
-            bot.send_photo(chat_id=os.getenv("TELEGRAM_CHAT_ID"), photo=image_file, caption=description)
-    except Exception as e:
-        print(f"Error sending chat telegram notification: {e}")
-
-# =============================================================================
 # Monitoring Functions
 # =============================================================================
 
 def monitor_stream(stream_url):
-    while monitoring_enabled:
+    max_retries = 5
+    cooldown = 60
+    while True:
         with app.app_context():
             stream = Stream.query.filter_by(room_url=stream_url).first()
-            if not stream or not stream.online:
-                break
-            streamer = stream_url.rstrip('/').split('/')[-1]
-            thumbnail_url = f"https://jpeg.live.mmcdn.com/stream?room={streamer}"
-            try:
-                response = requests.get(thumbnail_url, stream=True, timeout=10)
-                # If thumbnail fetch returns non-200 (e.g., 400), mark stream offline immediately.
-                if response.status_code != 200:
-                    print(f"Thumbnail fetch failed for {stream_url} with status code {response.status_code}. Marking offline.")
-                    stream.online = False
-                    db.session.commit()
-                    break
+            if not stream:
+                return
 
+            retries = 0
+            streamer = stream_url.rstrip('/').split('/')[-1]
+            try:
+                thumbnail_url = f"https://jpeg.live.mmcdn.com/stream?room={streamer}"
+                response = requests.get(thumbnail_url, stream=True, timeout=10)
+                if response.status_code != 200:
+                    raise Exception("Thumbnail fetch failed")
+                
+                # Save the detection image.
                 img = Image.open(BytesIO(response.content)).convert('RGB')
                 detection_id = str(uuid.uuid4())
-                # Save to temp folder
-                temp_detection_folder = os.path.join(app.config['UPLOAD_FOLDER'], 'temp_detections')
-                os.makedirs(temp_detection_folder, exist_ok=True)
-                image_path = os.path.join(temp_detection_folder, f"{detection_id}.jpg")
+                image_path = f"detections/{detection_id}.jpg"
+                os.makedirs(os.path.dirname(image_path), exist_ok=True)
                 img.save(image_path)
-
+                
                 update_flagged_objects()
                 frame = np.array(img)
                 detections = detect_frame(frame)
-
+                
                 if detections:
                     detection_data = {
                         'detections': detections,
-                        'image_path': image_path,
+                        'image_url': f"/detection-images/{detection_id}.jpg",
                         'stream_id': stream.id,
                         'timestamp': datetime.utcnow().isoformat()
                     }
@@ -518,27 +502,31 @@ def monitor_stream(stream_url):
                     )
                     db.session.add(log)
                     db.session.commit()
+                retries = 0
             except Exception as e:
-                print(f"Monitoring error for {stream_url}: {str(e)}")
+                print("Monitoring error:", e)
+                retries += 1
+                sleep_time = cooldown * (2 ** retries)
+                print("Retrying in", sleep_time, "s...")
+                time.sleep(sleep_time)
         time.sleep(10)
 
 def start_monitoring():
     with app.app_context():
         streams = Stream.query.all()
         for stream in streams:
-            if stream.online:
-                thread = threading.Thread(
-                    target=monitor_stream,
-                    args=(stream.room_url,),
-                    daemon=True
-                )
-                thread.start()
-                print(f"Started monitoring thread for {stream.room_url}")
+            thread = threading.Thread(
+                target=monitor_stream,
+                args=(stream.room_url,),
+                daemon=True
+            )
+            thread.start()
+            print("Started monitoring thread for", stream.room_url)
 
 def start_notification_monitor():
     def monitor_notifications():
         last_notified_time = datetime.utcnow() - timedelta(seconds=5)
-        while monitoring_enabled:
+        while True:
             try:
                 with app.app_context():
                     logs = Log.query.filter(
@@ -547,12 +535,13 @@ def start_notification_monitor():
                     ).all()
                     for log in logs:
                         detections = log.details.get('detections', [])
-                        for detection in detections:
-                            send_full_telegram_notification(log, detection)
+                        if detections:
+                            # Send one notification per log containing all detections.
+                            asyncio.run(send_full_telegram_notification(log, detections))
                     if logs:
                         last_notified_time = max(log.timestamp for log in logs)
             except Exception as e:
-                print(f"Notification monitor error: {e}")
+                print("Notification monitor error:", e)
             time.sleep(2)
     threading.Thread(target=monitor_notifications, daemon=True).start()
 
@@ -580,16 +569,18 @@ def detect_chat_from_image():
 
     update_flagged_keywords()
 
-    detected_keywords = [keyword for keyword in flagged_keywords if keyword.lower() in ocr_text.lower()]
+    detected_keywords = []
+    for keyword in flagged_keywords:
+        if keyword.lower() in ocr_text.lower():
+            detected_keywords.append(keyword)
 
     if detected_keywords:
         flagged_filename = f"flagged_{new_filename}"
         flagged_filepath = os.path.join(app.config['FLAGGED_CHAT_IMAGES_FOLDER'], flagged_filename)
         shutil.move(chat_image_path, flagged_filepath)
 
-        description = (
-            f"Chat flagged: Detected keywords {', '.join(detected_keywords)}. OCR text: {ocr_text}"
-        )
+        description = ("Chat flagged: Detected keywords " + ", ".join(detected_keywords) +
+                       ". OCR text: " + ocr_text)
 
         log = Log(
             room_url="chat",
@@ -610,11 +601,12 @@ def cleanup_chat_images():
     for filename in os.listdir(chat_folder):
         filepath = os.path.join(chat_folder, filename)
         if os.path.isfile(filepath):
-            if now - os.path.getctime(filepath) > 20:
+            file_age = now - os.path.getctime(filepath)
+            if file_age > 20:
                 try:
                     os.remove(filepath)
                 except Exception as e:
-                    print(f"Error deleting file {filepath}: {e}")
+                    print("Error deleting file", filepath, ":", e)
 
 def start_chat_cleanup_thread():
     def cleanup_loop():
@@ -622,7 +614,7 @@ def start_chat_cleanup_thread():
             try:
                 cleanup_chat_images()
             except Exception as e:
-                print(f"Chat cleanup error: {e}")
+                print("Chat cleanup error:", e)
             time.sleep(20)
     threading.Thread(target=cleanup_loop, daemon=True).start()
 
@@ -632,34 +624,21 @@ def start_chat_cleanup_thread():
 
 @app.route('/api/login', methods=['POST'])
 def login():
-    global monitoring_enabled, monitoring_threads_started, notification_monitor_started
     data = request.get_json()
     username = data.get('username')
     user = User.query.filter(
-        (User.username == username) | (User.email == username)
+        (User.username == username) | 
+        (User.email == username)
     ).filter_by(password=data.get('password')).first()
     if user:
         session.permanent = True
         session['user_id'] = user.id
-        # Enable monitoring on login
-        if not monitoring_enabled:
-            monitoring_enabled = True
-        if not monitoring_threads_started:
-            start_monitoring()
-            monitoring_threads_started = True
-        if not notification_monitor_started:
-            start_notification_monitor()
-            notification_monitor_started = True
         return jsonify({'message': 'Login successful', 'role': user.role})
     return jsonify({'message': 'Invalid credentials'}), 401
 
 @app.route('/api/logout', methods=['POST'])
 def logout():
     session.pop('user_id', None)
-    global monitoring_enabled, monitoring_threads_started, notification_monitor_started
-    monitoring_enabled = False
-    monitoring_threads_started = False
-    notification_monitor_started = False
     return jsonify({'message': 'Logged out'})
 
 @app.route('/api/session', methods=['GET'])
@@ -775,8 +754,7 @@ def create_stream():
     stream = Stream(
         room_url=room_url,
         platform=platform,
-        streamer_username=streamer,
-        online=True
+        streamer_username=streamer
     )
     db.session.add(stream)
     db.session.commit()
@@ -996,7 +974,7 @@ def test_visual_frame():
         results = detect_frame(frame)
         return jsonify({'results': results})
     except Exception as e:
-        return jsonify({'message': f'Processing error: {str(e)}'}), 500
+        return jsonify({'message': 'Processing error: ' + str(e)}), 500
 
 @app.route('/api/test/visual/stream', methods=['GET'])
 @login_required(role='admin')
@@ -1025,7 +1003,7 @@ def stream_visual():
                     }
                     yield "data: " + json.dumps(payload) + "\n\n"
                 except Exception as e:
-                    yield "data: " + json.dumps({"error": f"Detection error: {str(e)}"}) + "\n\n"
+                    yield "data: " + json.dumps({"error": "Detection error: " + str(e)}) + "\n\n"
                 time.sleep(0.5)
         finally:
             cap.release()
@@ -1057,7 +1035,7 @@ def detection_events():
                         yield f"data: {payload}\n\n"
                     time.sleep(2)
                 except Exception as e:
-                    print(f"SSE Error: {str(e)}")
+                    print("SSE Error:", e)
                     time.sleep(5)
     return app.response_class(generate(), mimetype='text/event-stream')
 
@@ -1066,6 +1044,7 @@ def unified_detect():
     data = request.get_json()
     text = data.get('text', '')
     visual_frame = data.get('visual_frame', None)
+    # Placeholder for audio detection if implemented.
     audio_flag = None
     visual_results = []
     if visual_frame:
@@ -1077,9 +1056,8 @@ def unified_detect():
         'visual': visual_results
     })
 
-# Only allow object detection if an admin or agent is logged in.
 @app.route('/api/detect-objects', methods=['POST'])
-@login_required()  
+@login_required()
 def detect_objects():
     try:
         data = request.get_json()
@@ -1111,7 +1089,7 @@ def detect_objects():
                 continue
         return jsonify({'detections': detections})
     except Exception as e:
-        print(f"Detection error: {str(e)}")
+        print("Detection error:", e)
         return jsonify({'error': 'Processing failed'}), 500
 
 @app.route('/api/notification-events')
@@ -1134,10 +1112,10 @@ def notification_events():
                                 'confidence': det.get('confidence', 0),
                                 'id': log.id
                             }
-                            yield f"data: {json.dumps(payload)}\n\n"
+                            yield "data: " + json.dumps(payload) + "\n\n"
                     time.sleep(1)
                 except Exception as e:
-                    print(f"SSE Error: {str(e)}")
+                    print("SSE Error:", e)
                     time.sleep(5)
     return app.response_class(generate(), mimetype='text/event-stream')
 
@@ -1146,5 +1124,7 @@ def notification_events():
 # =============================================================================
 if __name__ == '__main__':
     with app.app_context():
+        start_monitoring()
+        start_notification_monitor()
         start_chat_cleanup_thread()
     app.run(host='0.0.0.0', port=5000, threaded=True)
