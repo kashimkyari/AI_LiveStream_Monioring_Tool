@@ -3,7 +3,7 @@ FROM python:3.9 AS backend
 
 WORKDIR /app/backend
 
-# Install system dependencies required by some Python packages
+# Install system dependencies required for building Python packages and for OpenCV support
 RUN apt-get update && apt-get install -y \
     gcc \
     g++ \
@@ -11,14 +11,18 @@ RUN apt-get update && apt-get install -y \
     libpq-dev \
     build-essential \
     libffi-dev \
-    libssl-dev
+    libssl-dev \
+    libgl1-mesa-glx
 
 # Copy and install Python dependencies
 COPY backend/requirements.txt .
 RUN pip install --upgrade pip
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the rest of the backend code
+# Download spaCy English model
+RUN python -m spacy download en_core_web_sm
+
+# Copy the backend source code
 COPY backend .
 
 # Expose Flask's default port
@@ -33,7 +37,7 @@ WORKDIR /app/frontend
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm install
 
-# Copy the rest of the frontend code
+# Copy the rest of the frontend source code
 COPY frontend .
 
 # Build the React app
@@ -54,5 +58,5 @@ COPY --from=frontend /app/frontend/build /app/backend/static
 ENV FLASK_APP=backend/app.py
 ENV FLASK_RUN_HOST=0.0.0.0
 
-# Start the Flask app
+# Start the Flask application
 CMD ["python", "backend/app.py"]
