@@ -1,15 +1,15 @@
-# -------------------------------
-# Deployment: AI Streamer Application
-# -------------------------------
+# ---------------------------------------
+# Deployment: Robust Application Deployment
+# ---------------------------------------
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: ai-streamer-deployment      # This should match your GitHub secret EKS_DEPLOYMENT if used in automation
-  namespace: default                # Use your desired namespace (set as EKS_NAMESPACE if using secrets)
+  name: ai-streamer-deployment      # (Matches EKS_DEPLOYMENT in your workflows)
+  namespace: default                # (Or change to your custom namespace)
   labels:
     app: ai-streamer
 spec:
-  replicas: 3                       # Adjust the number of replicas as needed
+  replicas: 2                       # Adjust replicas as needed
   selector:
     matchLabels:
       app: ai-streamer
@@ -19,7 +19,7 @@ spec:
         app: ai-streamer
     spec:
       containers:
-      - name: ai-streamer           # This should match your GitHub secret CONTAINER_NAME if used in automation
+      - name: ai-streamer           # (Matches CONTAINER_NAME in your workflows)
         image: 038462756156.dkr.ecr.us-east-1.amazonaws.com/ai-streamer:latest
         imagePullPolicy: Always
         ports:
@@ -27,13 +27,13 @@ spec:
         resources:
           requests:
             cpu: "500m"
-            memory: "4Gi"           # Request a good amount of memory for your heavy app
+            memory: "4Gi"           # Good baseline for memory-intensive apps
           limits:
             cpu: "1"
-            memory: "8Gi"           # Set higher limits to ensure stability under load
+            memory: "8Gi"
         livenessProbe:
           httpGet:
-            path: /health           # Ensure your app exposes a /health endpoint for this probe
+            path: /health           # Ensure your app provides a /health endpoint
             port: 5000
           initialDelaySeconds: 30
           periodSeconds: 10
@@ -46,9 +46,9 @@ spec:
           periodSeconds: 5
 
 ---
-# -------------------------------
-# Service: Publicly Expose the Application
-# -------------------------------
+# ---------------------------------------
+# Service: Expose Application with a Static IP
+# ---------------------------------------
 apiVersion: v1
 kind: Service
 metadata:
@@ -56,35 +56,16 @@ metadata:
   namespace: default
   labels:
     app: ai-streamer
+  annotations:
+    # Use an NLB so that you can assign a static Elastic IP
+    service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+    # Replace the placeholder below with your Elastic IP allocation ID (not the IP address)
+    service.beta.kubernetes.io/aws-load-balancer-eip-allocations: "eipalloc-0195006ff85a2aa7b"
 spec:
-  type: LoadBalancer              # Exposes the service publicly
+  type: LoadBalancer
   ports:
-  - port: 80                      # External port (can be adjusted or used with an Ingress)
-    targetPort: 5000              # Internal container port
+  - port: 80                      # External port (adjust as needed)
+    targetPort: 5000              # Container port (your Flask app)
     protocol: TCP
   selector:
     app: ai-streamer
-
----
-# -------------------------------
-# Horizontal Pod Autoscaler (Optional)
-# -------------------------------
-apiVersion: autoscaling/v2
-kind: HorizontalPodAutoscaler
-metadata:
-  name: ai-streamer-hpa
-  namespace: default
-spec:
-  scaleTargetRef:
-    apiVersion: apps/v1
-    kind: Deployment
-    name: ai-streamer-deployment
-  minReplicas: 3
-  maxReplicas: 10
-  metrics:
-  - type: Resource
-    resource:
-      name: cpu
-      target:
-        type: Utilization
-        averageUtilization: 70
