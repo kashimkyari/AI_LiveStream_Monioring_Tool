@@ -71,6 +71,7 @@ sudo systemctl start flask_api
 # Build and serve the React frontend
 echo "Setting up React frontend..."
 cd $FRONTEND_DIR
+export NODE_OPTIONS=--openssl-legacy-provider
 npm install
 npm run build
 pm2 serve $FRONTEND_DIR/build --name react_frontend --spa
