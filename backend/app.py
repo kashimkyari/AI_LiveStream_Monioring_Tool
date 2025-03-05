@@ -1119,6 +1119,10 @@ def notification_events():
                     time.sleep(5)
     return app.response_class(generate(), mimetype='text/event-stream')
 
+@app.route('/health')
+def health():
+    return "OK", 200
+    
 # =============================================================================
 # Main Execution
 # =============================================================================
