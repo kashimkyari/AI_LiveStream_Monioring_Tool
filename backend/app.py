@@ -163,7 +163,8 @@ def send_chat_telegram_notification(image_path, description):
 # Database Existence Check
 # =============================================================================
 def ensure_database():
-    DB_HOST = os.getenv("DB_HOST", "localhost")
+    # Use the EC2 public IP as default so that PostgreSQL is accessible externally.
+    DB_HOST = os.getenv("DB_HOST", "54.86.99.85")
     DB_PORT = os.getenv("DB_PORT", "5432")
     DB_USER = os.getenv("DB_USER", "postgres")
     DB_PASSWORD = os.getenv("DB_PASSWORD", "password")
@@ -299,8 +300,10 @@ class TelegramRecipient(db.Model):
 # Flask App Initialization & Configuration
 # =============================================================================
 app = Flask(__name__)
+# Allow API requests from your React frontend hosted at http://54.86.99.85:3000.
 CORS(app, resources={r"/api/*": {"origins": "http://54.86.99.85:3000"}}, supports_credentials=True)
-app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql+psycopg2://postgres:password@localhost/stream_monitor'
+# Build the SQLALCHEMY_DATABASE_URI from environment variable DB_HOST (defaulting to your EC2 EIP)
+app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql+psycopg2://postgres:password@' + os.getenv("DB_HOST", "54.86.99.85") + '/stream_monitor'
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
     'pool_size': 200,
     'max_overflow': 4000,
