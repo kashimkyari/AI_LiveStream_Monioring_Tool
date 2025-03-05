@@ -297,8 +297,6 @@ class TelegramRecipient(db.Model):
 # =============================================================================
 # Flask App Initialization & Configuration
 # =============================================================================
-ensure_database()
-
 app = Flask(__name__)
 CORS(app, resources={r"/api/*": {"origins": "*"}})
 app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql+psycopg2://postgres:password@localhost/stream_monitor'
@@ -362,6 +360,7 @@ def allowed_file(filename):
 
 def login_required(role=None):
     def decorator(f):
+        from functools import wraps
         @wraps(f)
         def decorated_function(*args, **kwargs):
             if 'user_id' not in session:
@@ -1127,6 +1126,8 @@ def health():
 # Main Execution
 # =============================================================================
 if __name__ == '__main__':
+    # Run database initialization only when executed directly
+    ensure_database()
     with app.app_context():
         start_monitoring()
         start_notification_monitor()
