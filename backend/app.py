@@ -185,6 +185,7 @@ def ensure_database():
             cur.close()
             conn.close()
         else:
+            # In production, you likely don't want repeated log messages.
             print(f"Database '{NEW_DB_NAME}' already exists.")
     except psycopg2.Error as e:
         print(f"Error ensuring database: {e}")
@@ -1126,8 +1127,9 @@ def health():
 # Main Execution
 # =============================================================================
 if __name__ == '__main__':
-    # Run database initialization only when executed directly
-    ensure_database()
+    # Only run database initialization if explicitly enabled.
+    if os.getenv("RUN_DB_INIT", "False").lower() in ["true", "1"]:
+        ensure_database()
     with app.app_context():
         start_monitoring()
         start_notification_monitor()
