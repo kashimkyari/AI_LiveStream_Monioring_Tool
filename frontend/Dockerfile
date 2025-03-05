@@ -7,15 +7,11 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm install
 
-# Copy the rest of the source code and build the React app
+# Copy the rest of the source code
 COPY . .
-RUN npm run build
 
-# Install a static file server globally
-RUN npm install -g serve
-
-# Expose the port the app will run on
+# Expose the port the app runs on
 EXPOSE 3000
 
-# Serve the built app on port 3000
-CMD ["serve", "-s", "build", "-l", "3000"]
+# Start the React app using npm start
+CMD ["npm", "start"]
