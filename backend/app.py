@@ -39,7 +39,7 @@ from telegram import Bot
 # =============================================================================
 
 # Retrieve Telegram token from environment.
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "AAGWrWMrqzQkDP8bkKe3gafC42r_Ridr0gY")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "8175749575:AAGWrWMrqzQkDP8bkKe3gafC42r_Ridr0gY")
 # Removed global bot initialization to ensure we always use the current token.
 
 def get_bot(token=None):
@@ -48,7 +48,7 @@ def get_bot(token=None):
     If no token is provided, it retrieves the token from the environment.
     """
     if token is None:
-        token = os.getenv("TELEGRAM_TOKEN", "AAGWrWMrqzQkDP8bkKe3gafC42r_Ridr0gY")
+        token = os.getenv("TELEGRAM_TOKEN", "8175749575:AAGWrWMrqzQkDP8bkKe3gafC42r_Ridr0gY")
     return Bot(token=token)
 
 def send_text_message(msg, chat_id, token=None):
@@ -303,15 +303,15 @@ app = Flask(__name__)
 CORS(app, resources={r"/api/*": {"origins": "*"}})
 app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql+psycopg2://postgres:password@localhost/stream_monitor'
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
-    'pool_size': 20,
-    'max_overflow': 40,
-    'pool_timeout': 60,
+    'pool_size': 200,
+    'max_overflow': 4000,
+    'pool_timeout': 600,
     'pool_recycle': 3600,
     'pool_pre_ping': True
 }
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SECRET_KEY'] = 'supersecretkey'
-app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=7)
+app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=1)
 app.config['UPLOAD_FOLDER'] = 'uploads'
 app.config['CHAT_IMAGES_FOLDER'] = os.path.join(app.config['UPLOAD_FOLDER'], 'chat_images')
 app.config['FLAGGED_CHAT_IMAGES_FOLDER'] = os.path.join(app.config['UPLOAD_FOLDER'], 'flagged_chat_images')
@@ -1127,4 +1127,4 @@ if __name__ == '__main__':
         start_monitoring()
         start_notification_monitor()
         start_chat_cleanup_thread()
-    app.run(host='0.0.0.0', port=5000, threaded=True)
+    app.run(host='0.0.0.0', port=5000, threaded=True, debug=False)
