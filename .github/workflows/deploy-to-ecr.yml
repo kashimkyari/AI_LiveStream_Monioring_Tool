@@ -29,10 +29,15 @@ jobs:
           ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
           ECR_REPOSITORY_BACKEND: ${{ secrets.ECR_REPOSITORY_BACKEND }}
         run: |
-          docker build -t $ECR_REPOSITORY_BACKEND:latest -f backend/Dockerfile backend
-          docker tag $ECR_REPOSITORY_BACKEND:latest $ECR_REGISTRY/$ECR_REPOSITORY_BACKEND:latest
-          aws ecr describe-repositories --repository-names $ECR_REPOSITORY_BACKEND || aws ecr create-repository --repository-name $ECR_REPOSITORY_BACKEND
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY_BACKEND:latest
+          echo "ECR_REPOSITORY_BACKEND is: '$ECR_REPOSITORY_BACKEND'"
+          if [ -z "$ECR_REPOSITORY_BACKEND" ]; then
+            echo "Error: ECR_REPOSITORY_BACKEND is empty!"
+            exit 1
+          fi
+          docker build -t "$ECR_REPOSITORY_BACKEND:latest" -f backend/Dockerfile backend
+          docker tag "$ECR_REPOSITORY_BACKEND:latest" "$ECR_REGISTRY/$ECR_REPOSITORY_BACKEND:latest"
+          aws ecr describe-repositories --repository-names "$ECR_REPOSITORY_BACKEND" || aws ecr create-repository --repository-name "$ECR_REPOSITORY_BACKEND"
+          docker push "$ECR_REGISTRY/$ECR_REPOSITORY_BACKEND:latest"
 
       # Build and push the React frontend image
       - name: Build and Push Frontend Image
@@ -40,7 +45,12 @@ jobs:
           ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
           ECR_REPOSITORY_FRONTEND: ${{ secrets.ECR_REPOSITORY_FRONTEND }}
         run: |
-          docker build -t $ECR_REPOSITORY_FRONTEND:latest -f frontend/Dockerfile frontend
-          docker tag $ECR_REPOSITORY_FRONTEND:latest $ECR_REGISTRY/$ECR_REPOSITORY_FRONTEND:latest
-          aws ecr describe-repositories --repository-names $ECR_REPOSITORY_FRONTEND || aws ecr create-repository --repository-name $ECR_REPOSITORY_FRONTEND
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY_FRONTEND:latest
+          echo "ECR_REPOSITORY_FRONTEND is: '$ECR_REPOSITORY_FRONTEND'"
+          if [ -z "$ECR_REPOSITORY_FRONTEND" ]; then
+            echo "Error: ECR_REPOSITORY_FRONTEND is empty!"
+            exit 1
+          fi
+          docker build -t "$ECR_REPOSITORY_FRONTEND:latest" -f frontend/Dockerfile frontend
+          docker tag "$ECR_REPOSITORY_FRONTEND:latest" "$ECR_REGISTRY/$ECR_REPOSITORY_FRONTEND:latest"
+          aws ecr describe-repositories --repository-names "$ECR_REPOSITORY_FRONTEND" || aws ecr create-repository --repository-name "$ECR_REPOSITORY_FRONTEND"
+          docker push "$ECR_REGISTRY/$ECR_REPOSITORY_FRONTEND:latest"
