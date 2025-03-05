@@ -299,7 +299,7 @@ class TelegramRecipient(db.Model):
 # Flask App Initialization & Configuration
 # =============================================================================
 app = Flask(__name__)
-CORS(app, resources={r"/api/*": {"origins": "*"}})
+CORS(app, resources={r"/api/*": {"origins": "http://54.86.99.85:3000"}}, supports_credentials=True)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql+psycopg2://postgres:password@localhost/stream_monitor'
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
     'pool_size': 200,
