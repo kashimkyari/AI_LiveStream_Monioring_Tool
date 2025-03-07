@@ -1,1 +1,0 @@
-fix the agentdashboard.js to look and act like the admin panel, streams should load and object detection should act in the same way. maintain functions and do not remove lines of code, just build on it and make it better
