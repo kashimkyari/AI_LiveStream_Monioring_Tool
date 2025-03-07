@@ -18,7 +18,7 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-west-2
+          aws-region: us-east-1
 
       # Login to Amazon ECR
       - name: Login to Amazon ECR
@@ -29,19 +29,19 @@ jobs:
       - name: Build backend Docker image
         run: |
           docker build -t stream-monitor-backend:latest ./backend
-          docker tag stream-monitor-backend:latest ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-west-2.amazonaws.com/stream-monitor-backend:latest
+          docker tag stream-monitor-backend:latest ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com/stream-monitor-backend:latest
       - name: Push backend Docker image
         run: |
-          docker push ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-west-2.amazonaws.com/stream-monitor-backend:latest
+          docker push ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com/stream-monitor-backend:latest
       
       # Build and push frontend Docker image to ECR
       - name: Build frontend Docker image
         run: |
           docker build -t stream-monitor-frontend:latest ./frontend
-          docker tag stream-monitor-frontend:latest ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-west-2.amazonaws.com/stream-monitor-frontend:latest
+          docker tag stream-monitor-frontend:latest ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com/stream-monitor-frontend:latest
       - name: Push frontend Docker image
         run: |
-          docker push ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-west-2.amazonaws.com/stream-monitor-frontend:latest
+          docker push ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com/stream-monitor-frontend:latest
 
   deploy:
     needs: build
@@ -53,12 +53,12 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-west-2
+          aws-region: us-east-1
 
       # Update kubeconfig to interact with your EKS cluster
       - name: Update kubeconfig
         run: |
-          aws eks update-kubeconfig --region us-west-2 --name YOUR_EKS_CLUSTER_NAME
+          aws eks update-kubeconfig --region us-east-1 --name stream-monitor
       
       # Deploy the Kubernetes manifests to EKS
       - name: Deploy to EKS
