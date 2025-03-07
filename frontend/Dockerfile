@@ -12,8 +12,9 @@ RUN apk add --no-cache python3 make g++
 RUN corepack enable && corepack prepare pnpm@latest --activate
 
 # Cache dependencies with lockfile
-COPY package.json pnpm-lock.yaml* ./
-RUN pnpm install --frozen-lockfile --production=false
+COPY package.json ./
+COPY package-lock.json* pnpm-lock.yaml* ./
+RUN [ -f pnpm-lock.yaml ] && pnpm install --frozen-lockfile --production=false || npm ci --only=production
 
 # ========== Builder Stage ==========
 FROM node:20-alpine AS builder
@@ -30,9 +31,6 @@ ENV REACT_APP_API_URL=https://api.example.com
 # Build the application with tree shaking and optimization
 RUN npm run build
 
-# Optional: Run linting and tests to ensure quality before creating image
-# RUN npm run lint && npm run test
-
 # ========== Production Stage ==========
 FROM nginx:alpine-slim AS production
 WORKDIR /usr/share/nginx/html
@@ -46,11 +44,8 @@ RUN apk add --no-cache curl && \
 # Copy build files with proper ownership
 COPY --from=builder --chown=nginx:nginx /app/build .
 
-# Copy custom nginx configuration with improved security
-COPY --chown=nginx:nginx nginx/nginx.conf /etc/nginx/conf.d/default.conf
-
-# Create recommended nginx.conf if it doesn't exist
-RUN [ -f /etc/nginx/conf.d/default.conf ] || echo 'server { \
+# Create nginx configuration directly instead of attempting to copy non-existent file
+RUN echo 'server { \
     listen 80; \
     server_tokens off; \
     root /usr/share/nginx/html; \
