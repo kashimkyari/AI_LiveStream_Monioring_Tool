@@ -1,45 +1,28 @@
-# ========== Build Stage ==========
-FROM node:20-alpine AS deps
+# Build stage
+FROM node:16-alpine AS builder
 WORKDIR /app
 
-# Set proper environment for build
-ENV NODE_ENV=production
+# Copy package files
+COPY package.json ./
 
-# Just use npm directly instead of trying to install pnpm
-# Copy package files for dependency installation
-COPY package.json package-lock.json* ./
+# Install dependencies using regular npm install rather than npm ci
+# This is more reliable with your current package.json
+RUN npm install
 
-# Install dependencies with npm
-RUN npm ci --only=production
-
-# ========== Builder Stage ==========
-FROM node:20-alpine AS builder
-WORKDIR /app
-
-# Copy deps from previous stage
-COPY --from=deps /app/node_modules ./node_modules
+# Copy the rest of the application code
 COPY . .
 
-# Build with proper environment configuration
-ENV NODE_ENV=production
-ENV REACT_APP_API_URL=https://api.example.com
-
-# Build the application with tree shaking and optimization
+# Build the application
 RUN npm run build
 
-# ========== Production Stage ==========
+# Production stage
 FROM nginx:alpine AS production
 WORKDIR /usr/share/nginx/html
 
-# Install security utilities and set up proper permissions
-RUN apk add --no-cache curl && \
-    mkdir -p /var/cache/nginx /var/run /var/log/nginx && \
-    chown -R nginx:nginx /var/cache/nginx /var/run /var/log/nginx
+# Copy build output from builder stage
+COPY --from=builder /app/build .
 
-# Copy build files with proper ownership
-COPY --from=builder --chown=nginx:nginx /app/build .
-
-# Create nginx configuration directly
+# Create nginx configuration for SPA and security
 RUN echo 'server { \
     listen 80; \
     server_tokens off; \
@@ -49,31 +32,23 @@ RUN echo 'server { \
     location / { \
         try_files $uri $uri/ /index.html; \
     } \
-    # Cache static assets \
-    location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg)$ { \
-        expires 30d; \
-        add_header Cache-Control "public, no-transform"; \
-    } \
-    # Security headers \
-    add_header X-Content-Type-Options "nosniff" always; \
-    add_header X-Frame-Options "SAMEORIGIN" always; \
-    add_header X-XSS-Protection "1; mode=block" always; \
-    add_header Referrer-Policy "strict-origin-when-cross-origin" always; \
-    # Gzip settings \
+    # Basic security headers \
+    add_header X-Content-Type-Options "nosniff"; \
+    add_header X-Frame-Options "SAMEORIGIN"; \
+    # Enable gzip \
     gzip on; \
-    gzip_vary on; \
-    gzip_min_length 1000; \
-    gzip_types text/plain text/css application/json application/javascript text/xml application/xml text/javascript; \
+    gzip_types text/plain text/css application/javascript; \
 }' > /etc/nginx/conf.d/default.conf
 
-# Advanced health check
-HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
-  CMD curl -f http://localhost/index.html || exit 1
+# Simple health check
+HEALTHCHECK --interval=30s --timeout=3s --retries=3 \
+  CMD wget -q -O /dev/null http://localhost/ || exit 1
 
-# Configure container for unprivileged operation
-USER nginx
+# Expose port
 EXPOSE 80
 
+# No need to switch to nginx user in this alpine image
+# as it causes permission issues with default nginx config
 # Add container labels
 LABEL maintainer="DevOps Team <kashimkyari@gmail.com>" \
       version="2.0" \
