@@ -12,7 +12,7 @@ services:
       - DB_USER=postgres
       - DB_PASSWORD=password
       - NEW_DB_NAME=stream_monitor
-      - TELEGRAM_TOKEN=${{ secrets.TELEGRAM_TOKEN }}
+      - TELEGRAM_TOKEN=8175749575:AAGWrWMrqzQkDP8bkKe3gafC42r_Ridr0gY
     depends_on:
       - db
 
@@ -20,7 +20,9 @@ services:
     build: ./frontend
     container_name: stream-monitor-frontend
     ports:
-      - "80:80"
+      - "3000:3000"
+    environment:
+      - REACT_APP_API_URL=http://backend:5000
     depends_on:
       - backend
 
