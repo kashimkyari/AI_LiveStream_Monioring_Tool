@@ -1,120 +1,145 @@
-# ---------------------------------------
-# Python Backend Deployment
-# ---------------------------------------
+# eks-deployments.yaml
+
+# ---------------- Backend Deployment & Service ----------------
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: python-backend-deployment
-  namespace: default
+  name: stream-monitor-backend
   labels:
-    app: ai-streamer-backend
-spec:
-  replicas: 3
-  selector:
-    matchLabels:
-      app: ai-streamer-backend
-  template:
-    metadata:
-      labels:
-        app: ai-streamer-backend
-    spec:
-      containers:
-      - name: python-backend
-        image: 038462756156.dkr.ecr.us-east-1.amazonaws.com/ai-streamer-backend:latest
-        imagePullPolicy: Always
-        ports:
-        - containerPort: 5000
-        resources:
-          requests:
-            cpu: "500m"
-            memory: "4Gi"
-          limits:
-            cpu: "1"
-            memory: "8Gi"
-        livenessProbe:
-          httpGet:
-            path: /health
-            port: 5000
-          initialDelaySeconds: 30
-          periodSeconds: 10
-          failureThreshold: 3
-        readinessProbe:
-          httpGet:
-            path: /health
-            port: 5000
-          initialDelaySeconds: 10
-          periodSeconds: 5
----
-# Python Backend Service (Internal)
-apiVersion: v1
-kind: Service
-metadata:
-  name: python-backend-service
-  namespace: default
-  labels:
-    app: ai-streamer-backend
-spec:
-  type: ClusterIP
-  ports:
-  - port: 5000
-    targetPort: 5000
-    protocol: TCP
-  selector:
-    app: ai-streamer-backend
----
-# ---------------------------------------
-# React Frontend Deployment
-# ---------------------------------------
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: react-frontend-deployment
-  namespace: default
-  labels:
-    app: ai-streamer-frontend
+    app: stream-monitor-backend
 spec:
   replicas: 2
   selector:
     matchLabels:
-      app: ai-streamer-frontend
+      app: stream-monitor-backend
   template:
     metadata:
       labels:
-        app: ai-streamer-frontend
+        app: stream-monitor-backend
     spec:
       containers:
-      - name: react-frontend
-        image: 038462756156.dkr.ecr.us-east-1.amazonaws.com/ai-streamer-frontend:latest
-        imagePullPolicy: Always
+      - name: backend
+        image: 038462756156.dkr.ecr.us-east-1.amazonaws.com/stream-monitor-backend:latest
         ports:
-        - containerPort: 3000
-        resources:
-          requests:
-            cpu: "250m"
-            memory: "1Gi"
-          limits:
-            cpu: "500m"
-            memory: "2Gi"
+        - containerPort: 5000
+        env:
+        - name: DB_HOST
+          value: "stream-monitor-db"
+        - name: DB_PORT
+          value: "5432"
+        - name: DB_USER
+          value: "postgres"
+        - name: DB_PASSWORD
+          value: "password"
+        - name: NEW_DB_NAME
+          value: "stream_monitor"
+        - name: TELEGRAM_TOKEN
+          value: "8175749575:AAGWrWMrqzQkDP8bkKe3gafC42r_Ridr0gY"
 ---
-# React Frontend Service (Public with Static Elastic IP)
 apiVersion: v1
 kind: Service
 metadata:
-  name: react-frontend-service
-  namespace: default
+  name: stream-monitor-backend
+spec:
+  selector:
+    app: stream-monitor-backend
+  ports:
+  - protocol: TCP
+    port: 5000
+    targetPort: 5000
+
+# ---------------- Frontend Deployment & Service ----------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: stream-monitor-frontend
   labels:
-    app: ai-streamer-frontend
-  annotations:
-    # Use an NLB so you can assign a static Elastic IP
-    service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
-    # Replace with your actual Elastic IP allocation ID
-    service.beta.kubernetes.io/aws-load-balancer-eip-allocations: "eipalloc-0195006ff85a2aa7b"
+    app: stream-monitor-frontend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: stream-monitor-frontend
+  template:
+    metadata:
+      labels:
+        app: stream-monitor-frontend
+    spec:
+      containers:
+      - name: frontend
+        image: 038462756156.dkr.ecr.us-east-1.amazonaws.com/stream-monitor-frontend:latest
+        ports:
+        - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: stream-monitor-frontend
 spec:
   type: LoadBalancer
-  ports:
-  - name: http
-    port: 80          # Externally accessible port for the React app
-    targetPort: 3000  # Container port for the React app
-    protocol: TCP
   selector:
-    app: ai-streamer-frontend
+    app: stream-monitor-frontend
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 80
+
+# ---------------- Database (PostgreSQL) Deployment, PVC, and Service ----------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: stream-monitor-db
+  labels:
+    app: stream-monitor-db
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: stream-monitor-db
+  template:
+    metadata:
+      labels:
+        app: stream-monitor-db
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:13
+        ports:
+        - containerPort: 5432
+        env:
+        - name: POSTGRES_USER
+          value: "postgres"
+        - name: POSTGRES_PASSWORD
+          value: "password"
+        - name: POSTGRES_DB
+          value: "stream_monitor"
+        volumeMounts:
+        - name: postgres-data
+          mountPath: /var/lib/postgresql/data
+      volumes:
+      - name: postgres-data
+        persistentVolumeClaim:
+          claimName: postgres-pvc
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: stream-monitor-db
+spec:
+  selector:
+    app: stream-monitor-db
+  ports:
+  - protocol: TCP
+    port: 5432
+    targetPort: 5432

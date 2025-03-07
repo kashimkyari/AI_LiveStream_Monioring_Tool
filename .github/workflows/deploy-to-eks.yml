@@ -1,34 +1,66 @@
-# name: Deploy to EKS
+name: Deploy to EKS
 
-# on:
-#   workflow_run:
-#     workflows: ["Build and Push to ECR"]
-#     types:
-#       - completed
+on:
+  push:
+    branches: [ main ]
 
-# jobs:
-#   deploy:
-#     if: ${{ github.event.workflow_run.conclusion == 'success' }}
-#     runs-on: ubuntu-latest
-#     steps:
-#       - name: Checkout repository
-#         uses: actions/checkout@v4
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      # Checkout the repository
+      - name: Checkout code
+        uses: actions/checkout@v2
+      
+      # Configure AWS credentials from GitHub Secrets
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-west-2
 
-#       - name: Configure AWS credentials
-#         uses: aws-actions/configure-aws-credentials@v2
-#         with:
-#           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-#           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-#           aws-region: ${{ secrets.AWS_REGION }}
+      # Login to Amazon ECR
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
+      
+      # Build and push backend Docker image to ECR
+      - name: Build backend Docker image
+        run: |
+          docker build -t stream-monitor-backend:latest ./backend
+          docker tag stream-monitor-backend:latest ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-west-2.amazonaws.com/stream-monitor-backend:latest
+      - name: Push backend Docker image
+        run: |
+          docker push ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-west-2.amazonaws.com/stream-monitor-backend:latest
+      
+      # Build and push frontend Docker image to ECR
+      - name: Build frontend Docker image
+        run: |
+          docker build -t stream-monitor-frontend:latest ./frontend
+          docker tag stream-monitor-frontend:latest ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-west-2.amazonaws.com/stream-monitor-frontend:latest
+      - name: Push frontend Docker image
+        run: |
+          docker push ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-west-2.amazonaws.com/stream-monitor-frontend:latest
 
-#       - name: Wait for EKS cluster to be active
-#         run: |
-#           aws eks wait cluster-active --name ${{ secrets.EKS_CLUSTER }} --region ${{ secrets.AWS_REGION }}
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      # Configure AWS credentials again for deployment
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-west-2
 
-#       - name: Update kubeconfig
-#         run: |
-#           aws eks update-kubeconfig --name ${{ secrets.EKS_CLUSTER }} --region ${{ secrets.AWS_REGION }}
-
-#       - name: Deploy to EKS
-#         run: |
-#           kubectl apply -f eks-deployment.yaml
+      # Update kubeconfig to interact with your EKS cluster
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig --region us-west-2 --name YOUR_EKS_CLUSTER_NAME
+      
+      # Deploy the Kubernetes manifests to EKS
+      - name: Deploy to EKS
+        run: |
+          kubectl apply -f eks-deployments.yaml
