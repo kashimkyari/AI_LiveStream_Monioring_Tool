@@ -31,6 +31,9 @@ spec:
         ports:
         - name: http
           containerPort: 80
+        env:
+        - name: REACT_APP_API_URL
+          value: "/api"  # This will use the proxy setting in your package.json
         resources:
           requests:
             memory: "128Mi"
@@ -52,7 +55,7 @@ spec:
           periodSeconds: 20
         securityContext:
           runAsNonRoot: true
-          runAsUser: 1001
+          runAsUser: 101  # nginx runs as user 101 by default
           allowPrivilegeEscalation: false
           capabilities:
             drop:
@@ -69,7 +72,7 @@ metadata:
   annotations:
     kubernetes.io/description: "Frontend service for Stream Monitor application"
 spec:
-  type: LoadBalancer  # Changed from NodePort for better cloud integration
+  type: LoadBalancer
   selector:
     app: stream-monitor-frontend
   ports:
@@ -77,6 +80,26 @@ spec:
     protocol: TCP
     port: 80
     targetPort: 80
+---
+# ----------------- Backend Service (for API requests) -----------------
+apiVersion: v1
+kind: Service
+metadata:
+  name: stream-monitor-backend
+  labels:
+    app: stream-monitor-backend
+    tier: backend
+  annotations:
+    kubernetes.io/description: "Backend service for Stream Monitor application"
+spec:
+  type: ClusterIP
+  selector:
+    app: stream-monitor-backend  # Make sure this matches your backend deployment labels
+  ports:
+  - name: http
+    protocol: TCP
+    port: 5000  # This should match your backend service port
+    targetPort: 5000  # This should match your backend container port
 ---
 # ----------------- Frontend HorizontalPodAutoscaler -----------------
 apiVersion: autoscaling/v2
