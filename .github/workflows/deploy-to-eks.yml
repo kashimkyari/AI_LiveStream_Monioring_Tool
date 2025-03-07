@@ -63,4 +63,4 @@ jobs:
       # Deploy the Kubernetes manifests to EKS
       - name: Deploy to EKS
         run: |
-          kubectl apply -f k8s/eks-deployment.yml
+          kubectl apply -f https://github.com/kashimkyari/AI_LiveStream_Monioring_Tool/blob/main/eks-deployment.yaml
