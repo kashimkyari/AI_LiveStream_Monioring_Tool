@@ -25,14 +25,14 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v1
       
-      # Build and push backend Docker image to ECR
-      - name: Build backend Docker image
-        run: |
-          docker build -t stream-monitor-backend:latest ./backend
-          docker tag stream-monitor-backend:latest ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com/stream-monitor-backend:latest
-      - name: Push backend Docker image
-        run: |
-          docker push ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com/stream-monitor-backend:latest
+      # # Build and push backend Docker image to ECR
+      # - name: Build backend Docker image
+      #   run: |
+      #     docker build -t stream-monitor-backend:latest ./backend
+      #     docker tag stream-monitor-backend:latest ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com/stream-monitor-backend:latest
+      # - name: Push backend Docker image
+      #   run: |
+      #     docker push ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com/stream-monitor-backend:latest
       
       # Build and push frontend Docker image to ECR
       - name: Build frontend Docker image
