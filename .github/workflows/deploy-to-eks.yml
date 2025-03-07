@@ -139,8 +139,7 @@ jobs:
           kind: Service
           metadata:
             name: stream-monitor-frontend
-            annotations:
-              service.beta.kubernetes.io/aws-load-balancer-eip-allocations: "eipalloc-0c9c8301d6b810805"
+            # EIP annotation removed to allow dynamic IP assignment by AWS
           spec:
             type: LoadBalancer
             selector:
