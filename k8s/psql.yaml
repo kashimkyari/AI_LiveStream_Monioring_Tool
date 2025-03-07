@@ -1,0 +1,37 @@
+# ----------------- Database (PostgreSQL) Deployment & Service -----------------
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: stream-monitor-db
+spec:
+  serviceName: stream-monitor-db
+  replicas: 1
+  selector:
+    matchLabels:
+      app: stream-monitor-db
+  template:
+    metadata:
+      labels:
+        app: stream-monitor-db
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:13
+        ports:
+        - containerPort: 5432
+        # Hardcoded sensitive data (not recommended for production)
+        env:
+        - name: POSTGRES_PASSWORD
+          value: "password"
+        volumeMounts:
+        - name: postgres-data
+          mountPath: /var/lib/postgresql/data
+  volumeClaimTemplates:
+  - metadata:
+      name: postgres-data
+    spec:
+      storageClassName: gp2
+      accessModes: [ "ReadWriteOnce" ]
+      resources:
+        requests:
+          storage: 5Gi

@@ -1,21 +1,36 @@
-# Use an official Node.js runtime as a lightweight base image.
-FROM node:16-alpine
+# Use an official Node.js runtime as a lightweight base image
+FROM node:16-alpine AS builder
 
-# Set the working directory in the container.
+# Set the working directory in the container
 WORKDIR /app
 
-# Copy the package.json and package-lock.json (if available) for dependency installation.
+# Copy package files and install dependencies
 COPY package*.json ./
+RUN npm ci --only=production
 
-# Install production dependencies.
-RUN npm install
-
-# Copy all application source code into the container.
+# Copy source code
 COPY . .
 
-# Expose the port that your application listens on.
-# Adjust the port number if your app uses a different port.
-EXPOSE 3000
+# Build the application (assuming it's a React/Vue/Angular app)
+RUN npm run build
 
-# Set the default command to run your Node.js application.
-CMD ["npm", "start"]
+# Create production image
+FROM nginx:alpine
+
+# Copy the build output from builder stage
+COPY --from=builder /app/build /usr/share/nginx/html
+
+# Copy custom nginx config if needed
+# COPY nginx.conf /etc/nginx/conf.d/default.conf
+
+# Configure container health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+  CMD wget --quiet --tries=1 --spider http://localhost:80/ || exit 1
+
+# Expose the port for the application
+EXPOSE 80
+
+# Set user to non-root for better security
+USER nginx
+
+# NGINX starts automatically, no need for CMD

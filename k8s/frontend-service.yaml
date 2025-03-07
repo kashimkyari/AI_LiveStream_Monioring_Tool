@@ -1,0 +1,16 @@
+# ----------------- Frontend Service (Updated) -----------------
+apiVersion: v1
+kind: Service
+metadata:
+  name: stream-monitor-frontend
+spec:
+  type: NodePort
+  selector:
+    app: stream-monitor-frontend
+  externalIPs:
+    - 54.161.89.67
+  ports:
+  - protocol: TCP
+    port: 80          # Service port (internal cluster access)
+    targetPort: 80    # Matches the containerPort of the frontend
+    nodePort: 30000   # External access port (30000-32767 range)

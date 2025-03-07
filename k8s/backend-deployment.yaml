@@ -1,0 +1,38 @@
+# ----------------- Backend Deployment & Service -----------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: stream-monitor-backend
+  labels:
+    app: stream-monitor-backend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: stream-monitor-backend
+  template:
+    metadata:
+      labels:
+        app: stream-monitor-backend
+    spec:
+      containers:
+      - name: backend
+        image: 038462756156.dkr.ecr.us-east-1.amazonaws.com/stream-monitor-backend:latest
+        ports:
+        - containerPort: 5000
+        # Hardcoded sensitive data (not recommended for production)
+        env:
+        - name: DB_PASSWORD
+          value: "password"
+        - name: TELEGRAM_TOKEN
+          value: "8175749575:AAGWrWMrqzQkDP8bkKe3gafC42r_Ridr0gY"
+        resources:
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 5000
+          initialDelaySeconds: 30
+          periodSeconds: 10

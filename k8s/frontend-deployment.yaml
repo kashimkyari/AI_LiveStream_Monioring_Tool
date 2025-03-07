@@ -1,0 +1,26 @@
+# ----------------- Frontend Deployment & Service -----------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: stream-monitor-frontend
+  labels:
+    app: stream-monitor-frontend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: stream-monitor-frontend
+  template:
+    metadata:
+      labels:
+        app: stream-monitor-frontend
+    spec:
+      containers:
+      - name: frontend
+        image: 038462756156.dkr.ecr.us-east-1.amazonaws.com/stream-monitor-frontend:latest
+        ports:
+        - containerPort: 80
+        resources:
+          limits:
+            memory: "256Mi"
+            cpu: "250m"

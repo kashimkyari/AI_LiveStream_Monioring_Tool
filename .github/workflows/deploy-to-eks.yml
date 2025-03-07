@@ -43,24 +43,24 @@ jobs:
         run: |
           docker push ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com/stream-monitor-frontend:latest
 
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      # Configure AWS credentials again for deployment
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v1
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-east-1
+  # deploy:
+  #   needs: build
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     # Configure AWS credentials again for deployment
+  #     - name: Configure AWS credentials
+  #       uses: aws-actions/configure-aws-credentials@v1
+  #       with:
+  #         aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+  #         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+  #         aws-region: us-east-1
 
-      # Update kubeconfig to interact with your EKS cluster
-      - name: Update kubeconfig
-        run: |
-          aws eks update-kubeconfig --region us-east-1 --name stream-monitor
+  #     # Update kubeconfig to interact with your EKS cluster
+  #     - name: Update kubeconfig
+  #       run: |
+  #         aws eks update-kubeconfig --region us-east-1 --name stream-monitor
 
-      # Deploy the Kubernetes manifests to EKS using an inline heredoc
-      - name: Deploy to EKS
-        run: |
-          kubectl apply -f https://raw.githubusercontent.com/kashimkyari/AI_LiveStream_Monioring_Tool/main/eks-deployment.yaml
+  #     # Deploy the Kubernetes manifests to EKS using an inline heredoc
+  #     - name: Deploy to EKS
+  #       run: |
+  #         kubectl apply -f https://raw.githubusercontent.com/kashimkyari/AI_LiveStream_Monioring_Tool/main/eks-deployment.yaml
