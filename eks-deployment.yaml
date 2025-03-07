@@ -19,7 +19,7 @@ spec:
       - name: ecr-registry-secret
       containers:
       - name: backend
-        image: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com/stream-monitor-backend:latest
+        image: 038462756156.dkr.ecr.us-east-1.amazonaws.com/stream-monitor-backend:latest
         ports:
         - containerPort: 5000
         env:
@@ -69,7 +69,7 @@ spec:
       - name: ecr-registry-secret
       containers:
       - name: frontend
-        image: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com/stream-monitor-frontend:latest
+        image: 038462756156.dkr.ecr.us-east-1.amazonaws.com/stream-monitor-frontend:latest
         ports:
         - containerPort: 80
 ---
