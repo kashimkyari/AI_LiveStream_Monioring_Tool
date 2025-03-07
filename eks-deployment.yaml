@@ -15,7 +15,6 @@ spec:
       labels:
         app: stream-monitor-backend
     spec:
-      
       containers:
       - name: backend
         image: 038462756156.dkr.ecr.us-east-1.amazonaws.com/stream-monitor-backend:latest
@@ -77,14 +76,16 @@ metadata:
   annotations:
     # Force the creation of an external LoadBalancer (public)
     service.beta.kubernetes.io/aws-load-balancer-internal: "false"
+    service.beta.kubernetes.io/aws-load-balancer-eip-allocations: "eipalloc-0c9c8301d6b810805"   # Associates the given Elastic IP
+    service.beta.kubernetes.io/aws-load-balancer-security-groups: "sg-033319018a0786188"         # Applies the specified security group
 spec:
   type: LoadBalancer
   selector:
     app: stream-monitor-frontend
   ports:
   - protocol: TCP
-    port: 80
-    targetPort: 80
+    port: 3000          # Expose on port 3000 externally
+    targetPort: 80      # Container continues to listen on port 80
 ---
 # ---------------- Database (PostgreSQL) Deployment, PVC, and Service ----------------
 apiVersion: apps/v1
