@@ -60,7 +60,7 @@ jobs:
         run: |
           aws eks update-kubeconfig --region us-east-1 --name stream-monitor
 
-      # Deploy the Kubernetes manifests to EKS using an inline heredoc
-      - name: Deploy to EKS
-        run: |
-          https://raw.githubusercontent.com/kashimkyari/AI_LiveStream_Monioring_Tool/refs/heads/main/k8s/deploy-frntend.yml
+      # # Deploy the Kubernetes manifests to EKS using an inline heredoc
+      # - name: Deploy to EKS
+      #   run: |
+      #     https://raw.githubusercontent.com/kashimkyari/AI_LiveStream_Monioring_Tool/refs/heads/main/k8s/deploy-frntend.yml

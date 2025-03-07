@@ -31,12 +31,12 @@ RUN chown -R appuser:appuser /app
 # Switch to non-root user
 USER appuser
 
-# Expose port 8080
-EXPOSE 8080
+# Expose port 80
+EXPOSE 80
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --retries=3 \
-  CMD wget -q -O /dev/null http://localhost:8080 || exit 1
+  CMD wget -q -O /dev/null http://localhost:80 || exit 1
 
 # Container metadata
 LABEL maintainer="DevOps Team <kashimkyari@gmail.com>" \
@@ -45,4 +45,4 @@ LABEL maintainer="DevOps Team <kashimkyari@gmail.com>" \
       org.opencontainers.image.source="https://github.com/kashimkyari/AI_LiveStream_Monioring_Tool"
 
 # Start the httpd server
-CMD ["busybox", "httpd", "-f", "-v", "-p", "8080", "-h", "/app"]
+CMD ["busybox", "httpd", "-f", "-v", "-p", "80", "-h", "/app"]

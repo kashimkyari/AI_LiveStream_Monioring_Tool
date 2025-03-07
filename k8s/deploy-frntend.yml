@@ -1,20 +1,12 @@
-# ----------------- Frontend Deployment -----------------
+# ----------------- Frontend Deployment & Service -----------------
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: stream-monitor-frontend
   labels:
     app: stream-monitor-frontend
-    tier: frontend
-  annotations:
-    kubernetes.io/description: "Frontend web interface for Stream Monitor application"
 spec:
   replicas: 2
-  strategy:
-    type: RollingUpdate
-    rollingUpdate:
-      maxSurge: 1
-      maxUnavailable: 0
   selector:
     matchLabels:
       app: stream-monitor-frontend
@@ -22,134 +14,13 @@ spec:
     metadata:
       labels:
         app: stream-monitor-frontend
-        tier: frontend
     spec:
       containers:
       - name: frontend
         image: 038462756156.dkr.ecr.us-east-1.amazonaws.com/stream-monitor-frontend:latest
-        imagePullPolicy: Always
         ports:
-        - name: http
-          containerPort: 3000
-        env:
-        - name: REACT_APP_API_URL
-          value: "/api"
+        - containerPort: 8080
         resources:
-          requests:
-            memory: "128Mi"  # Increased for Node.js
-            cpu: "100m"      # Increased for Node.js
           limits:
-            memory: "256Mi"  # Increased for Node.js
-            cpu: "200m"      # Increased for Node.js
-        readinessProbe:
-          httpGet:
-            path: /
-            port: 3000
-          initialDelaySeconds: 10
-          periodSeconds: 5
-        livenessProbe:
-          httpGet:
-            path: /
-            port: 3000
-          initialDelaySeconds: 15
-          periodSeconds: 20
-        securityContext:
-          runAsNonRoot: true
-          runAsUser: 1001
-          allowPrivilegeEscalation: false
-          capabilities:
-            drop:
-              - ALL
-          readOnlyRootFilesystem: true
----
-# ----------------- Frontend Service -----------------
-apiVersion: v1
-kind: Service
-metadata:
-  name: stream-monitor-frontend
-  labels:
-    app: stream-monitor-frontend
-    tier: frontend
-  annotations:
-    kubernetes.io/description: "Frontend service for Stream Monitor application"
-    service.beta.kubernetes.io/aws-load-balancer-eip-allocations: "eipalloc-xyz123"  # Replace with your EIP allocation ID
-spec:
-  type: LoadBalancer
-  selector:
-    app: stream-monitor-frontend
-  ports:
-  - name: http
-    protocol: TCP
-    port: 80
-    targetPort: 3000
-  externalIPs:
-  - "54.161.89.67"  # Your specific IP
-  externalTrafficPolicy: Local
----
-# ----------------- Backend Service (for API requests) -----------------
-apiVersion: v1
-kind: Service
-metadata:
-  name: stream-monitor-backend
-  labels:
-    app: stream-monitor-backend
-    tier: backend
-  annotations:
-    kubernetes.io/description: "Backend service for Stream Monitor application"
-spec:
-  type: ClusterIP
-  selector:
-    app: stream-monitor-backend
-  ports:
-  - name: http
-    protocol: TCP
-    port: 5000
-    targetPort: 5000
----
-# ----------------- Frontend HorizontalPodAutoscaler -----------------
-apiVersion: autoscaling/v2
-kind: HorizontalPodAutoscaler
-metadata:
-  name: stream-monitor-frontend-hpa
-  labels:
-    app: stream-monitor-frontend
-spec:
-  scaleTargetRef:
-    apiVersion: apps/v1
-    kind: Deployment
-    name: stream-monitor-frontend
-  minReplicas: 2
-  maxReplicas: 5
-  metrics:
-  - type: Resource
-    resource:
-      name: cpu
-      target:
-        type: Utilization
-        averageUtilization: 70
----
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: frontend-network-policy
-spec:
-  podSelector:
-    matchLabels:
-      app: stream-monitor-frontend
-  ingress:
-  - from:
-    - podSelector:
-        matchLabels:
-          tier: ingress
-  - ports:
-    - port: 3000
----
-apiVersion: policy/v1
-kind: PodDisruptionBudget
-metadata:
-  name: stream-monitor-frontend-pdb
-spec:
-  minAvailable: 1
-  selector:
-    matchLabels:
-      app: stream-monitor-frontend
+            memory: "256Mi"
+            cpu: "250m"
