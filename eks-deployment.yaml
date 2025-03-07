@@ -15,8 +15,7 @@ spec:
       labels:
         app: stream-monitor-backend
     spec:
-      imagePullSecrets:
-      - name: ecr-registry-secret
+      
       containers:
       - name: backend
         image: 038462756156.dkr.ecr.us-east-1.amazonaws.com/stream-monitor-backend:latest
@@ -65,8 +64,6 @@ spec:
       labels:
         app: stream-monitor-frontend
     spec:
-      imagePullSecrets:
-      - name: ecr-registry-secret
       containers:
       - name: frontend
         image: 038462756156.dkr.ecr.us-east-1.amazonaws.com/stream-monitor-frontend:latest
