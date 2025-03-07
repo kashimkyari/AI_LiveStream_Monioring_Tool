@@ -30,32 +30,32 @@ spec:
         imagePullPolicy: Always
         ports:
         - name: http
-          containerPort: 8080
+          containerPort: 3000
         env:
         - name: REACT_APP_API_URL
           value: "/api"
         resources:
           requests:
-            memory: "64Mi"  # Reduced for busybox which is very lightweight
-            cpu: "50m"      # Reduced for busybox which is very lightweight
+            memory: "128Mi"  # Increased for Node.js
+            cpu: "100m"      # Increased for Node.js
           limits:
-            memory: "128Mi" # Reduced for busybox which is very lightweight
-            cpu: "100m"     # Reduced for busybox which is very lightweight
+            memory: "256Mi"  # Increased for Node.js
+            cpu: "200m"      # Increased for Node.js
         readinessProbe:
           httpGet:
             path: /
-            port: 8080
-          initialDelaySeconds: 5
+            port: 3000
+          initialDelaySeconds: 10
           periodSeconds: 5
         livenessProbe:
           httpGet:
             path: /
-            port: 8080
-          initialDelaySeconds: 10
+            port: 3000
+          initialDelaySeconds: 15
           periodSeconds: 20
         securityContext:
           runAsNonRoot: true
-          runAsUser: 1001  # The appuser we created in the Dockerfile
+          runAsUser: 1001
           allowPrivilegeEscalation: false
           capabilities:
             drop:
@@ -72,6 +72,7 @@ metadata:
     tier: frontend
   annotations:
     kubernetes.io/description: "Frontend service for Stream Monitor application"
+    service.beta.kubernetes.io/aws-load-balancer-eip-allocations: "eipalloc-xyz123"  # Replace with your EIP allocation ID
 spec:
   type: LoadBalancer
   selector:
@@ -80,7 +81,10 @@ spec:
   - name: http
     protocol: TCP
     port: 80
-    targetPort: 8080
+    targetPort: 3000
+  externalIPs:
+  - "54.161.89.67"  # Your specific IP
+  externalTrafficPolicy: Local
 ---
 # ----------------- Backend Service (for API requests) -----------------
 apiVersion: v1
@@ -123,10 +127,7 @@ spec:
       target:
         type: Utilization
         averageUtilization: 70
-
-
 ---
-
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -141,11 +142,8 @@ spec:
         matchLabels:
           tier: ingress
   - ports:
-    - port: 8080
-
-
+    - port: 3000
 ---
-
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
