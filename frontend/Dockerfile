@@ -1,40 +1,29 @@
-# Stage 1: Build the React app
-FROM node:16-alpine AS builder
+# Development stage: Run the React app in dev mode with hot-reloading
+FROM node:16-alpine
 WORKDIR /app
 
-# Copy package files and install dependencies (use package-lock.json if available)
+# Copy package files and install dependencies
 COPY package.json package-lock.json* ./
 RUN npm install
 
-# Copy the rest of the application code and build the app
+# Copy the rest of the application code
 COPY . .
-RUN npm run build
 
-# Stage 2: Serve the app using the 'serve' package
-FROM node:16-alpine AS production
-WORKDIR /app
+# Ensure the dev server listens on all interfaces
+ENV HOST=0.0.0.0
 
-# Install 'serve' globally and wget (used in health checks)
-RUN npm install -g serve && apk add --no-cache wget
-
-# Copy the built files from the builder stage
-COPY --from=builder /app/build ./build
-
-# Expose port 3000 (as specified)
+# Expose port 3000 (matching React dev server default)
 EXPOSE 3000
 
-# Health check to monitor container health on port 3000
+# Health check (verify dev server responsiveness)
 HEALTHCHECK --interval=30s --timeout=3s --retries=3 \
   CMD wget -q -O /dev/null http://localhost:3000 || exit 1
 
-# Start the app using serve in single-page application mode on port 3000
-CMD ["serve", "-s", "build", "-l", "tcp://0.0.0.0:3000"]
+# Start the app in development mode with hot-reload
+CMD ["npm", "start"]
 
-
-# No need to switch to nginx user in this alpine image
-# as it causes permission issues with default nginx config
-# Add container labels
+# Container metadata
 LABEL maintainer="DevOps Team <kashimkyari@gmail.com>" \
-      version="2.0" \
-      description="Stream Monitor Frontend" \
+      version="2.0-dev" \
+      description="Stream Monitor Frontend (Development Mode)" \
       org.opencontainers.image.source="https://github.com/kashimkyari/AI_LiveStream_Monioring_Tool"
