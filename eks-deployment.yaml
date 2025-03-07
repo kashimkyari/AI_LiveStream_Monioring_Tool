@@ -76,24 +76,20 @@ spec:
             memory: "256Mi"
             cpu: "250m"
 ---
+# ----------------- Frontend Service (Updated) -----------------
 apiVersion: v1
 kind: Service
 metadata:
   name: stream-monitor-frontend
-  annotations:
-    service.beta.kubernetes.io/aws-load-balancer-type: "external"
-    service.beta.kubernetes.io/aws-load-balancer-scheme: "internet-facing"
-    service.beta.kubernetes.io/aws-load-balancer-subnets: "subnet-0545ba94f041b848a"  # Specify public subnets
-    service.beta.kubernetes.io/aws-load-balancer-eip-allocations: "eipalloc-0c9c8301d6b810805"
 spec:
-  type: LoadBalancer
+  type: NodePort
   selector:
     app: stream-monitor-frontend
   ports:
   - protocol: TCP
-    port: 3000
-    targetPort: 80
-
+    port: 80          # Service port (internal cluster access)
+    targetPort: 80    # Matches the containerPort of the frontend
+    nodePort: 30000   # External access port (30000-32767 range)
 # ----------------- Database (PostgreSQL) Deployment & Service -----------------
 apiVersion: apps/v1
 kind: StatefulSet
