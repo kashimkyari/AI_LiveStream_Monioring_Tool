@@ -2,6 +2,10 @@
 FROM node:16-alpine
 WORKDIR /app
 
+# Set npm cache to a directory with appropriate permissions to avoid EACCES errors.
+# Critical: This directs npm to use /tmp/.npm instead of the default (which is /.npm).
+ENV npm_config_cache=/tmp/.npm
+
 # Copy package files and install dependencies
 COPY package.json package-lock.json* ./
 RUN npm install
@@ -15,7 +19,7 @@ ENV HOST=0.0.0.0
 # Expose port 3000 (matching React dev server default)
 EXPOSE 3000
 
-# Health check (verify dev server responsiveness)
+# Health check: verify the dev server responsiveness
 HEALTHCHECK --interval=30s --timeout=3s --retries=3 \
   CMD wget -q -O /dev/null http://localhost:3000 || exit 1
 
