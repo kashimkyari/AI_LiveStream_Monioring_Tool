@@ -1,25 +1,19 @@
+# Use an official Python runtime as the base image
 FROM python:3.9-slim
 
-# Set working directory
+# Set the working directory in the container
 WORKDIR /app
 
-# Install system dependencies (modify as needed)
-RUN apt-get update && apt-get install -y \
-    gcc \
-    libpq-dev \
-    libffi-dev \
-    libssl-dev \
-    libgl1-mesa-glx
-
-# Copy and install Python dependencies
+# Copy the requirements file and install Python dependencies
 COPY requirements.txt .
-RUN pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the application source code
+# Copy the entire backend code (including app.py)
 COPY . .
 
-# Expose the port the app listens on
+# Expose port 5000 (Flask/Gunicorn will listen here)
 EXPOSE 5000
 
-# Start the Flask backend
-CMD ["python", "app.py"]
+# Start the Flask application using Gunicorn
+# Assumes that app.py contains a WSGI application named "app"
+CMD ["gunicorn", "app:app", "--bind", "0.0.0.0:5000", "--workers", "3"]

@@ -303,7 +303,11 @@ app = Flask(__name__)
 # Allow API requests from your React frontend hosted at http://54.86.99.85:3000.
 CORS(app, resources={r"/api/*": {"origins": "http://54.86.99.85:3000"}}, supports_credentials=True)
 # Build the SQLALCHEMY_DATABASE_URI from environment variable DB_HOST (defaulting to your EC2 EIP)
-app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql+psycopg2://postgres:password@' + os.getenv("DB_HOST", "54.86.99.85") + '/stream_monitor'
+app.config['SQLALCHEMY_DATABASE_URI'] = (
+    'postgresql+psycopg2://postgres:password@' +
+    os.getenv("DB_HOST", "localhost") +
+    '/stream_monitor'
+)
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
     'pool_size': 200,
     'max_overflow': 4000,

@@ -1,18 +1,38 @@
-version: '3'
+version: '3.8'
+
 services:
   backend:
-    build:
-      context: .
-      dockerfile: Dockerfile.backend
+    build: ./backend
+    container_name: stream-monitor-backend
     ports:
       - "5000:5000"
     environment:
-      - FLASK_APP=app.py
-      - FLASK_RUN_HOST=0.0.0.0
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_USER=postgres
+      - DB_PASSWORD=password
+      - NEW_DB_NAME=stream_monitor
+      - TELEGRAM_TOKEN=${{ secrets.TELEGRAM_TOKEN }}
+    depends_on:
+      - db
 
   frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile.frontend
+    build: ./frontend
+    container_name: stream-monitor-frontend
     ports:
       - "80:80"
+    depends_on:
+      - backend
+
+  db:
+    image: postgres:13
+    container_name: stream-monitor-db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: stream_monitor
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+volumes:
+  pgdata:
