@@ -30,36 +30,37 @@ spec:
         imagePullPolicy: Always
         ports:
         - name: http
-          containerPort: 80
+          containerPort: 8080
         env:
         - name: REACT_APP_API_URL
-          value: "/api"  # This will use the proxy setting in your package.json
+          value: "/api"
         resources:
           requests:
-            memory: "128Mi"
-            cpu: "100m"
+            memory: "64Mi"  # Reduced for busybox which is very lightweight
+            cpu: "50m"      # Reduced for busybox which is very lightweight
           limits:
-            memory: "256Mi"
-            cpu: "250m"
+            memory: "128Mi" # Reduced for busybox which is very lightweight
+            cpu: "100m"     # Reduced for busybox which is very lightweight
         readinessProbe:
           httpGet:
             path: /
-            port: 80
-          initialDelaySeconds: 10
+            port: 8080
+          initialDelaySeconds: 5
           periodSeconds: 5
         livenessProbe:
           httpGet:
             path: /
-            port: 80
-          initialDelaySeconds: 15
+            port: 8080
+          initialDelaySeconds: 10
           periodSeconds: 20
         securityContext:
           runAsNonRoot: true
-          runAsUser: 101  # nginx runs as user 101 by default
+          runAsUser: 1001  # The appuser we created in the Dockerfile
           allowPrivilegeEscalation: false
           capabilities:
             drop:
               - ALL
+          readOnlyRootFilesystem: true
 ---
 # ----------------- Frontend Service -----------------
 apiVersion: v1
@@ -79,7 +80,7 @@ spec:
   - name: http
     protocol: TCP
     port: 80
-    targetPort: 80
+    targetPort: 8080
 ---
 # ----------------- Backend Service (for API requests) -----------------
 apiVersion: v1
@@ -94,12 +95,12 @@ metadata:
 spec:
   type: ClusterIP
   selector:
-    app: stream-monitor-backend  # Make sure this matches your backend deployment labels
+    app: stream-monitor-backend
   ports:
   - name: http
     protocol: TCP
-    port: 5000  # This should match your backend service port
-    targetPort: 5000  # This should match your backend container port
+    port: 5000
+    targetPort: 5000
 ---
 # ----------------- Frontend HorizontalPodAutoscaler -----------------
 apiVersion: autoscaling/v2
