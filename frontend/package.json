@@ -9,7 +9,8 @@
     "react-scripts": "^4.0.3"
   },
   "scripts": {
-    "start": "react-scripts start",
+    "start": "serve -s app -l 8080",
+    "devstart": "react-scripts start",
     "build": "react-scripts build"
   },
   "proxy": "http://0.0.0.0:5000",

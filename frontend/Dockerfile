@@ -7,7 +7,7 @@ ENV npm_config_cache=/tmp/.npm
 
 # Copy package files and install dependencies
 COPY package.json package-lock.json* ./
-RUN npm install
+RUN npm install --production
 
 # Copy the rest of the application code
 COPY . .
@@ -15,18 +15,18 @@ COPY . .
 # Build the app for production
 RUN npm run build
 
-# Production stage: Serve the built app with busybox httpd
-FROM busybox:1.36
+# Production stage: Serve the built app with Node.js and npm start
+FROM node:16-alpine
+WORKDIR /app
 
 # Create a non-root user
 RUN adduser -D -u 1001 appuser
 
-# Create directory structure
-WORKDIR /app
-COPY --from=build /app/build /app
+# Copy built assets from build stage
+COPY --from=build --chown=appuser:appuser /app/build /app
 
-# Give ownership to the non-root user
-RUN chown -R appuser:appuser /app
+# Install serve globally to serve static files
+RUN npm install -g serve
 
 # Switch to non-root user
 USER appuser
@@ -44,5 +44,5 @@ LABEL maintainer="DevOps Team <kashimkyari@gmail.com>" \
       description="Stream Monitor Frontend (Production)" \
       org.opencontainers.image.source="https://github.com/kashimkyari/AI_LiveStream_Monioring_Tool"
 
-# Start the httpd server
-CMD ["busybox", "httpd", "-f", "-v", "-p", "8080", "-h", "/app"]
+# Start the app using serve (mapped to npm start via package.json)
+CMD ["serve", "-s", "app", "-l", "8080"]
