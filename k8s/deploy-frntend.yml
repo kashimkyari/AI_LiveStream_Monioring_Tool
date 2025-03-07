@@ -123,3 +123,35 @@ spec:
       target:
         type: Utilization
         averageUtilization: 70
+
+
+---
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: frontend-network-policy
+spec:
+  podSelector:
+    matchLabels:
+      app: stream-monitor-frontend
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          tier: ingress
+  - ports:
+    - port: 8080
+
+
+---
+
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: stream-monitor-frontend-pdb
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: stream-monitor-frontend
