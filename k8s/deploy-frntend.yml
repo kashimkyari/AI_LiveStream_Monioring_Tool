@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
       - name: frontend
-        image: 038462756156.dkr.ecr.us-east-1.amazonaws.com/stream-monitor-frontend:2.0 # Use specific version tag
+        image: 038462756156.dkr.ecr.us-east-1.amazonaws.com/stream-monitor-frontend:latest # Use specific version tag
         ports:
         - containerPort: 8080
         resources:

@@ -164,7 +164,7 @@ def send_chat_telegram_notification(image_path, description):
 # =============================================================================
 def ensure_database():
     # Use the EC2 public IP as default so that PostgreSQL is accessible externally.
-    DB_HOST = os.getenv("DB_HOST", "54.86.99.85")
+    DB_HOST = os.getenv("DB_HOST", "localhost")
     DB_PORT = os.getenv("DB_PORT", "5432")
     DB_USER = os.getenv("DB_USER", "postgres")
     DB_PASSWORD = os.getenv("DB_PASSWORD", "password")
@@ -301,7 +301,7 @@ class TelegramRecipient(db.Model):
 # =============================================================================
 app = Flask(__name__)
 # Allow API requests from your React frontend hosted at http://54.86.99.85:3000.
-CORS(app, resources={r"/api/*": {"origins": "http://54.86.99.85:3000"}}, supports_credentials=True)
+CORS(app, resources={r"/api/*": {"origins": "http://0.0.0.0:3000"}}, supports_credentials=True)
 # Build the SQLALCHEMY_DATABASE_URI from environment variable DB_HOST (defaulting to your EC2 EIP)
 app.config['SQLALCHEMY_DATABASE_URI'] = (
     'postgresql+psycopg2://postgres:password@' +
@@ -427,8 +427,10 @@ def detect_chat(stream_url=""):
         }
     return {'status': 'clean'}
 
-# Load YOLOv8 model for visual detection.
-model = YOLO("yolov8s.pt")
+# Load YOLO model for visual detection with GPU support if available.
+device = "cuda" if torch.cuda.is_available() else "cpu"
+# Updated to use the YOLOv10m model weights from Ultralytics.
+model = YOLO("yolov10m.pt", device=device)
 flagged_objects = []
 
 def update_flagged_objects():
@@ -553,7 +555,7 @@ def start_notification_monitor():
     threading.Thread(target=monitor_notifications, daemon=True).start()
 
 # =============================================================================
-# Chat Image Detection & Cleanup Functions
+# Chat & Detection Image Cleanup Functions
 # =============================================================================
 
 @app.route('/api/detect-chat', methods=['POST'])
@@ -623,6 +625,35 @@ def start_chat_cleanup_thread():
             except Exception as e:
                 print("Chat cleanup error:", e)
             time.sleep(20)
+    threading.Thread(target=cleanup_loop, daemon=True).start()
+
+def cleanup_detection_images():
+    """
+    Deletes saved detection images from the 'detections' folder if they are older than 30 minutes.
+    """
+    detections_folder = "detections"
+    now = time.time()
+    threshold = 1800  # 30 minutes in seconds
+    if not os.path.exists(detections_folder):
+        return
+    for filename in os.listdir(detections_folder):
+        filepath = os.path.join(detections_folder, filename)
+        if os.path.isfile(filepath):
+            file_age = now - os.path.getctime(filepath)
+            if file_age > threshold:
+                try:
+                    os.remove(filepath)
+                except Exception as e:
+                    print("Error deleting detection image", filepath, ":", e)
+
+def start_detection_cleanup_thread():
+    def cleanup_loop():
+        while True:
+            try:
+                cleanup_detection_images()
+            except Exception as e:
+                print("Detection cleanup error:", e)
+            time.sleep(1800)  # run cleanup every 30 minutes
     threading.Thread(target=cleanup_loop, daemon=True).start()
 
 # =============================================================================
@@ -1006,7 +1037,7 @@ def stream_visual():
                     payload = {
                         'results': results,
                         'detected_objects': list(detected_objects_set),
-                        'model': 'yolov8'
+                        'model': 'yolov10m'
                     }
                     yield "data: " + json.dumps(payload) + "\n\n"
                 except Exception as e:
@@ -1141,4 +1172,5 @@ if __name__ == '__main__':
         start_monitoring()
         start_notification_monitor()
         start_chat_cleanup_thread()
+        start_detection_cleanup_thread()  # Start periodic cleanup of detection images
     app.run(host='0.0.0.0', port=5000, threaded=True, debug=False)
