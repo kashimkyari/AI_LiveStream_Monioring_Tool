@@ -166,7 +166,7 @@ def ensure_database():
     # Use the EC2 public IP as default so that PostgreSQL is accessible externally.
     DB_HOST = os.getenv("DB_HOST", "localhost")
     DB_PORT = os.getenv("DB_PORT", "5432")
-    DB_USER = os.getenv("DB_USER", "ec2_user")
+    DB_USER = os.getenv("DB_USER", "postgres")
     DB_PASSWORD = os.getenv("DB_PASSWORD", "password")
     NEW_DB_NAME = os.getenv("NEW_DB_NAME", "stream_monitor")
     try:
@@ -301,10 +301,10 @@ class TelegramRecipient(db.Model):
 # =============================================================================
 app = Flask(__name__)
 # Allow API requests from your React frontend hosted at http://54.86.99.85:3000.
-CORS(app, resources={r"/api/*": {"origins": "http://0.0.0.0:3000"}}, supports_credentials=True)
+CORS(app, resources={r"/api/*": {"origins": "http://127.0.0.1:3000"}}, supports_credentials=True)
 # Build the SQLALCHEMY_DATABASE_URI from environment variable DB_HOST (defaulting to your EC2 EIP)
 app.config['SQLALCHEMY_DATABASE_URI'] = (
-    'postgresql+psycopg2://ec2_user:password@' +
+    'postgresql+psycopg2://postgres:password@' +
     os.getenv("DB_HOST", "localhost") +
     '/stream_monitor'
 )
