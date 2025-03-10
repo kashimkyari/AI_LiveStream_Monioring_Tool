@@ -395,7 +395,9 @@ def detect_chat(stream_url=""):
 # Load YOLO model for visual detection with GPU support if available.
 device = "cuda" if torch.cuda.is_available() else "cpu"
 # Updated to use the YOLOv10m model weights from Ultralytics.
-model = YOLO("yolov10m.pt", device=device)
+model = YOLO("yolov10m.pt")  # Fix: Removed unsupported 'device' argument
+model.to(device)  # Move model to the appropriate device
+
 flagged_objects = []
 
 def update_flagged_objects():
