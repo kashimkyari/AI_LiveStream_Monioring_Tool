@@ -1,5 +1,6 @@
 #!/usr/bin/env python
-# This is the full updated app.py with fancy annotated detection images sent via Telegram.
+# This is the full updated app.py with robust monitoring and optimized concurrent livestream handling.
+# Telegram notifications have been updated to use synchronous calls.
 
 import os
 import sys
@@ -7,14 +8,12 @@ import json
 import threading
 import time
 import random
-import asyncio
 import spacy
 import cv2
 import torch
 import numpy as np
-# Removed psycopg2 and related import as we are switching to SQLite.
-# import psycopg2
-# from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
+import logging
+import concurrent.futures
 from flask import Flask, request, jsonify, session, current_app, send_from_directory
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
@@ -36,20 +35,26 @@ from spacy.matcher import Matcher
 from telegram import Bot
 
 # =============================================================================
+# Logging Configuration
+# =============================================================================
+logging.basicConfig(
+    level=logging.INFO,
+    format='[%(asctime)s] %(levelname)s in %(module)s: %(message)s'
+)
+
+# =============================================================================
 # Configuration & Initialization
 # =============================================================================
 
 # Retrieve Telegram token from environment.
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "8175749575:AAGWrWMrqzQkDP8bkKe3gafC42r_Ridr0gY")
-# Removed global bot initialization to ensure we always use the current token.
 
 def get_bot(token=None):
     """
     Returns a new instance of telegram.Bot using the provided token.
-    If no token is provided, it retrieves the token from the environment.
     """
     if token is None:
-        token = os.getenv("TELEGRAM_TOKEN", "8175749575:AAGWrWMrqzQkDP8bkKe3gafC42r_Ridr0gY")
+        token = os.getenv("TELEGRAM_TOKEN", TELEGRAM_TOKEN)
     return Bot(token=token)
 
 def send_text_message(msg, chat_id, token=None):
@@ -63,13 +68,12 @@ def send_text_message(msg, chat_id, token=None):
 ALLOWED_EXTENSIONS = {'mp4', 'avi', 'mov'}
 
 # =============================================================================
-# Telegram Notification Functions with Fancy Annotations
+# Telegram Notification Functions with Fancy Annotations (Synchronous Version)
 # =============================================================================
 
-async def send_full_telegram_notification(log, detections):
+def send_full_telegram_notification_sync(log, detections):
     """
-    Sends a Telegram notification with an annotated image showing all detections.
-    Detections is expected to be a list of dictionaries with keys: 'class', 'confidence', 'box'.
+    Synchronously sends a Telegram notification with an annotated image showing all detections.
     """
     try:
         room_url = log.room_url
@@ -101,7 +105,6 @@ async def send_full_telegram_notification(log, detections):
         response = requests.get(thumbnail_url, stream=True, timeout=128)
         if response.status_code == 200:
             image_data = response.content
-            # Convert image data to OpenCV image.
             nparr = np.frombuffer(image_data, np.uint8)
             img_cv = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
             # Annotate the image with all detections.
@@ -111,14 +114,11 @@ async def send_full_telegram_notification(log, detections):
                 confidence = detection.get('confidence', 0)
                 if box:
                     x1, y1, x2, y2 = map(int, box)
-                    # Draw rectangle (green).
                     cv2.rectangle(img_cv, (x1, y1), (x2, y2), (0, 255, 0), 2)
                     label = "{}: {:.2f}".format(class_name, confidence)
-                    # Get text size for a fancy background.
                     (w, h), baseline = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)
                     cv2.rectangle(img_cv, (x1, y1 - h - baseline), (x1 + w, y1), (0, 255, 0), -1)
                     cv2.putText(img_cv, label, (x1, y1 - baseline), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
-            # Encode the annotated image.
             retval, buffer = cv2.imencode('.jpg', img_cv)
             annotated_image_io = BytesIO(buffer.tobytes())
             annotated_image_io.seek(0)
@@ -126,7 +126,6 @@ async def send_full_telegram_notification(log, detections):
         else:
             img_io = thumbnail_url
 
-        # Get a fresh bot instance.
         bot_instance = get_bot()
 
         # Notify assigned agent if exists.
@@ -134,9 +133,9 @@ async def send_full_telegram_notification(log, detections):
             agent_recipient = TelegramRecipient.query.filter_by(telegram_username=agent.username).first()
             if agent_recipient:
                 try:
-                    await bot_instance.send_photo(chat_id=agent_recipient.chat_id, photo=img_io, caption=caption)
+                    bot_instance.send_photo(chat_id=agent_recipient.chat_id, photo=img_io, caption=caption)
                 except Exception as e:
-                    print("Error sending to agent:", e)
+                    logging.error("Error sending to agent: %s", e)
 
         # Notify all admin recipients.
         admin_recipients = TelegramRecipient.query.all()
@@ -144,21 +143,20 @@ async def send_full_telegram_notification(log, detections):
             if agent and recipient.telegram_username == agent.username:
                 continue
             try:
-                await bot_instance.send_photo(chat_id=recipient.chat_id, photo=img_io, caption=caption)
+                bot_instance.send_photo(chat_id=recipient.chat_id, photo=img_io, caption=caption)
             except Exception as e:
-                print("Error sending to admin:", e)
+                logging.error("Error sending to admin: %s", e)
 
     except Exception as e:
-        print("Notification error:", e)
+        logging.error("Notification error: %s", e)
 
 def send_chat_telegram_notification(image_path, description):
     try:
         with open(image_path, "rb") as image_file:
-            # Get a fresh bot instance for sending the chat image.
             bot_instance = get_bot()
             bot_instance.send_photo(chat_id=os.getenv("TELEGRAM_CHAT_ID"), photo=image_file, caption=description)
     except Exception as e:
-        print("Error sending chat telegram notification:", e)
+        logging.error("Error sending chat telegram notification: %s", e)
 
 # =============================================================================
 # Models & Database Setup
@@ -269,9 +267,7 @@ class TelegramRecipient(db.Model):
 # Flask App Initialization & Configuration
 # =============================================================================
 app = Flask(__name__)
-# Allow API requests from your React frontend hosted at http://54.86.99.85:3000.
 CORS(app, resources={r"/api/*": {"origins": "http://127.0.0.1:3000"}}, supports_credentials=True)
-# Updated SQLALCHEMY_DATABASE_URI to use SQLite.
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///stream_monitor.db'
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
     'pool_size': 200,
@@ -297,7 +293,6 @@ def shutdown_session(exception=None):
 
 with app.app_context():
     db.create_all()
-    # Create default admin user if not exists.
     if not User.query.filter_by(role='admin').first():
         admin = User(
             username='admin',
@@ -310,7 +305,6 @@ with app.app_context():
         )
         db.session.add(admin)
         db.session.commit()
-    # Optionally create an agent user.
     if not User.query.filter_by(role='agent').first():
         agent = User(
             username='agent',
@@ -357,7 +351,6 @@ update_flagged_keywords()
 # Detection Functions
 # =============================================================================
 
-# Load spaCy model and initialize matcher.
 nlp = spacy.load("en_core_web_sm")
 matcher = Matcher(nlp.vocab)
 
@@ -372,8 +365,7 @@ def refresh_keywords():
 
 def detect_chat(stream_url=""):
     """
-    A simple chat detection using spaCy matcher.
-    This example uses a sample message; replace with actual chat text.
+    Performs chat detection using spaCy matcher.
     """
     refresh_keywords()
     sample_message = "Sample chat message containing flagged keywords"
@@ -392,11 +384,12 @@ def detect_chat(stream_url=""):
         }
     return {'status': 'clean'}
 
-# Load YOLO model for visual detection with GPU support if available.
+# Global lock to ensure thread-safe access to the YOLO model.
+detection_lock = threading.Lock()
+
 device = "cuda" if torch.cuda.is_available() else "cpu"
-# Updated to use the YOLOv10m model weights from Ultralytics.
-model = YOLO("yolov10m.pt")  # Fix: Removed unsupported 'device' argument
-model.to(device)  # Move model to the appropriate device
+model = YOLO("yolov10m.pt")
+model.to(device)
 
 flagged_objects = []
 
@@ -411,25 +404,28 @@ def update_flagged_objects():
 
 def detect_frame(frame):
     frame = cv2.resize(frame, (640, 480))
-    results = model(frame)
     detections = []
-    for result in results:
-        boxes = result.boxes.data.cpu().numpy()
-        for detection in boxes:
-            x1, y1, x2, y2, conf, cls = detection
-            class_id = int(cls)
-            # Handle model.names as dict or list.
-            if isinstance(model.names, dict):
-                class_name = model.names.get(class_id, "unknown").lower()
-            else:
-                class_name = model.names[class_id].lower() if class_id < len(model.names) else "unknown"
-            flagged_obj = next((obj for obj in flagged_objects if obj['name'] == class_name), None)
-            if flagged_obj and conf >= flagged_obj['threshold']:
-                detections.append({
-                    'class': class_name,
-                    'confidence': float(conf),
-                    'box': [float(x1), float(y1), float(x2), float(y2)]
-                })
+    try:
+        with detection_lock:
+            results = model(frame)
+        for result in results:
+            boxes = result.boxes.data.cpu().numpy()
+            for detection in boxes:
+                x1, y1, x2, y2, conf, cls = detection
+                class_id = int(cls)
+                if isinstance(model.names, dict):
+                    class_name = model.names.get(class_id, "unknown").lower()
+                else:
+                    class_name = model.names[class_id].lower() if class_id < len(model.names) else "unknown"
+                flagged_obj = next((obj for obj in flagged_objects if obj['name'] == class_name), None)
+                if flagged_obj and conf >= flagged_obj['threshold']:
+                    detections.append({
+                        'class': class_name,
+                        'confidence': float(conf),
+                        'box': [float(x1), float(y1), float(x2), float(y2)]
+                    })
+    except Exception as e:
+        logging.error("Error during frame detection: %s", e)
     return detections
 
 # =============================================================================
@@ -437,23 +433,29 @@ def detect_frame(frame):
 # =============================================================================
 
 def monitor_stream(stream_url):
+    """
+    Monitors a single livestream.
+    Uses a persistent session and exponential backoff on failures.
+    """
     max_retries = 5
     cooldown = 60
+    max_sleep = 300  # Cap the backoff time
+    retries = 0
+    session_requests = requests.Session()
     while True:
         with app.app_context():
             stream = Stream.query.filter_by(room_url=stream_url).first()
             if not stream:
+                logging.info("Stream %s not found. Exiting monitor.", stream_url)
                 return
 
-            retries = 0
             streamer = stream_url.rstrip('/').split('/')[-1]
             try:
                 thumbnail_url = f"https://jpeg.live.mmcdn.com/stream?room={streamer}"
-                response = requests.get(thumbnail_url, stream=True, timeout=10)
+                response = session_requests.get(thumbnail_url, stream=True, timeout=10)
                 if response.status_code != 200:
                     raise Exception("Thumbnail fetch failed")
                 
-                # Save the detection image.
                 img = Image.open(BytesIO(response.content)).convert('RGB')
                 detection_id = str(uuid.uuid4())
                 image_path = f"detections/{detection_id}.jpg"
@@ -471,33 +473,32 @@ def monitor_stream(stream_url):
                         'stream_id': stream.id,
                         'timestamp': datetime.utcnow().isoformat()
                     }
-                    log = Log(
+                    log_entry = Log(
                         room_url=stream_url,
                         event_type='object_detection',
                         details=detection_data
                     )
-                    db.session.add(log)
+                    db.session.add(log_entry)
                     db.session.commit()
                 retries = 0
             except Exception as e:
-                print("Monitoring error:", e)
+                logging.error("Monitoring error for %s: %s", stream_url, e)
                 retries += 1
-                sleep_time = cooldown * (2 ** retries)
-                print("Retrying in", sleep_time, "s...")
+                sleep_time = min(cooldown * (2 ** retries), max_sleep)
+                logging.info("Retrying %s in %s seconds...", stream_url, sleep_time)
                 time.sleep(sleep_time)
         time.sleep(10)
+
+monitoring_executor = concurrent.futures.ThreadPoolExecutor(max_workers=20)
 
 def start_monitoring():
     with app.app_context():
         streams = Stream.query.all()
+        if len(streams) > 20:
+            logging.warning("Number of streams (%s) exceeds max concurrent limit (20). Some streams may not be monitored concurrently.", len(streams))
         for stream in streams:
-            thread = threading.Thread(
-                target=monitor_stream,
-                args=(stream.room_url,),
-                daemon=True
-            )
-            thread.start()
-            print("Started monitoring thread for", stream.room_url)
+            monitoring_executor.submit(monitor_stream, stream.room_url)
+            logging.info("Submitted monitoring task for %s", stream.room_url)
 
 def start_notification_monitor():
     def monitor_notifications():
@@ -512,12 +513,11 @@ def start_notification_monitor():
                     for log in logs:
                         detections = log.details.get('detections', [])
                         if detections:
-                            # Send one notification per log containing all detections.
-                            asyncio.run(send_full_telegram_notification(log, detections))
+                            send_full_telegram_notification_sync(log, detections)
                     if logs:
                         last_notified_time = max(log.timestamp for log in logs)
             except Exception as e:
-                print("Notification monitor error:", e)
+                logging.error("Notification monitor error: %s", e)
             time.sleep(2)
     threading.Thread(target=monitor_notifications, daemon=True).start()
 
@@ -558,12 +558,12 @@ def detect_chat_from_image():
         description = ("Chat flagged: Detected keywords " + ", ".join(detected_keywords) +
                        ". OCR text: " + ocr_text)
 
-        log = Log(
+        log_entry = Log(
             room_url="chat",
             event_type='chat_detection',
             details={'keywords': detected_keywords, 'ocr_text': ocr_text}
         )
-        db.session.add(log)
+        db.session.add(log_entry)
         db.session.commit()
 
         send_chat_telegram_notification(flagged_filepath, description)
@@ -582,7 +582,7 @@ def cleanup_chat_images():
                 try:
                     os.remove(filepath)
                 except Exception as e:
-                    print("Error deleting file", filepath, ":", e)
+                    logging.error("Error deleting file %s: %s", filepath, e)
 
 def start_chat_cleanup_thread():
     def cleanup_loop():
@@ -590,17 +590,14 @@ def start_chat_cleanup_thread():
             try:
                 cleanup_chat_images()
             except Exception as e:
-                print("Chat cleanup error:", e)
+                logging.error("Chat cleanup error: %s", e)
             time.sleep(20)
     threading.Thread(target=cleanup_loop, daemon=True).start()
 
 def cleanup_detection_images():
-    """
-    Deletes saved detection images from the 'detections' folder if they are older than 30 minutes.
-    """
     detections_folder = "detections"
     now = time.time()
-    threshold = 1800  # 30 minutes in seconds
+    threshold = 1800  # 30 minutes
     if not os.path.exists(detections_folder):
         return
     for filename in os.listdir(detections_folder):
@@ -611,7 +608,7 @@ def cleanup_detection_images():
                 try:
                     os.remove(filepath)
                 except Exception as e:
-                    print("Error deleting detection image", filepath, ":", e)
+                    logging.error("Error deleting detection image %s: %s", filepath, e)
 
 def start_detection_cleanup_thread():
     def cleanup_loop():
@@ -619,8 +616,8 @@ def start_detection_cleanup_thread():
             try:
                 cleanup_detection_images()
             except Exception as e:
-                print("Detection cleanup error:", e)
-            time.sleep(1800)  # run cleanup every 30 minutes
+                logging.error("Detection cleanup error: %s", e)
+            time.sleep(1800)
     threading.Thread(target=cleanup_loop, daemon=True).start()
 
 # =============================================================================
@@ -1040,7 +1037,7 @@ def detection_events():
                         yield f"data: {payload}\n\n"
                     time.sleep(2)
                 except Exception as e:
-                    print("SSE Error:", e)
+                    logging.error("SSE Error: %s", e)
                     time.sleep(5)
     return app.response_class(generate(), mimetype='text/event-stream')
 
@@ -1049,7 +1046,6 @@ def unified_detect():
     data = request.get_json()
     text = data.get('text', '')
     visual_frame = data.get('visual_frame', None)
-    # Placeholder for audio detection if implemented.
     audio_flag = None
     visual_results = []
     if visual_frame:
@@ -1094,7 +1090,7 @@ def detect_objects():
                 continue
         return jsonify({'detections': detections})
     except Exception as e:
-        print("Detection error:", e)
+        logging.error("Detection error: %s", e)
         return jsonify({'error': 'Processing failed'}), 500
 
 @app.route('/api/notification-events')
@@ -1120,22 +1116,21 @@ def notification_events():
                             yield "data: " + json.dumps(payload) + "\n\n"
                     time.sleep(1)
                 except Exception as e:
-                    print("SSE Error:", e)
+                    logging.error("SSE Error: %s", e)
                     time.sleep(5)
     return app.response_class(generate(), mimetype='text/event-stream')
 
 @app.route('/health')
 def health():
     return "OK", 200
-    
+
 # =============================================================================
 # Main Execution
 # =============================================================================
 if __name__ == '__main__':
-    # Removed PostgreSQL-specific database initialization.
     with app.app_context():
         start_monitoring()
         start_notification_monitor()
         start_chat_cleanup_thread()
-        start_detection_cleanup_thread()  # Start periodic cleanup of detection images
+        start_detection_cleanup_thread()
     app.run(host='0.0.0.0', port=5000, threaded=True, debug=False)
