@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
-import { StripchatPlayer } from '@stripchat/stripchat-embedded';
 
 const VideoPlayer = ({ streamer_username, thumbnail = false, alerts = [], platform = 'cbxyz' }) => {
   const [thumbnailError, setThumbnailError] = useState(false);
@@ -11,10 +10,6 @@ const VideoPlayer = ({ streamer_username, thumbnail = false, alerts = [], platfo
   const retryTimeout = useRef(null);
   const detectionActive = useRef(false);
 
-  // Ref for the canvas element to mount the Stripchat embedded player.
-  const stripchatCanvasRef = useRef(null);
-
-  // Function for AI object detection.
   const detectObjects = useCallback(async (imageUrl) => {
     try {
       const base64Data = imageUrl.split(',')[1];
@@ -29,7 +24,6 @@ const VideoPlayer = ({ streamer_username, thumbnail = false, alerts = [], platfo
     }
   }, [streamer_username]);
 
-  // Function to fetch a live stream thumbnail (when in thumbnail mode).
   const fetchThumbnail = useCallback(async () => {
     if (!isOnline || detectionActive.current || !thumbnail) return;
 
@@ -37,7 +31,7 @@ const VideoPlayer = ({ streamer_username, thumbnail = false, alerts = [], platfo
       detectionActive.current = true;
       const timestamp = Date.now();
       
-      // Determine thumbnail URL based on platform.
+      // Use different thumbnail endpoints based on platform
       let thumbnailUrl;
       if (platform.toLowerCase() === 'stripchat') {
         thumbnailUrl = `https://img.strpst.com/thumbs/${streamer_username}?t=${timestamp}`;
@@ -46,6 +40,7 @@ const VideoPlayer = ({ streamer_username, thumbnail = false, alerts = [], platfo
       }
       
       const res = await fetch(thumbnailUrl);
+      
       if (!res.ok) throw new Error('Stream offline');
       
       const blob = await res.blob();
@@ -69,14 +64,13 @@ const VideoPlayer = ({ streamer_username, thumbnail = false, alerts = [], platfo
     }
   }, [isOnline, streamer_username, thumbnail, detectObjects, platform]);
 
-  // Handle offline state and schedule a retry.
   const handleOfflineState = (error) => {
     console.error('Stream offline:', error);
     setThumbnailError(true);
     setIsOnline(false);
     clearTimeout(retryTimeout.current);
     
-    const baseDelay = 60000 * Math.pow(2, 3); // 8 minutes max delay
+    const baseDelay = 60000 * Math.pow(2, 3); // 8 minutes max
     const jitter = Math.random() * 15000;
     retryTimeout.current = setTimeout(() => {
       setIsOnline(true);
@@ -84,7 +78,6 @@ const VideoPlayer = ({ streamer_username, thumbnail = false, alerts = [], platfo
     }, baseDelay + jitter);
   };
 
-  // Effect to continuously fetch thumbnails if in thumbnail mode.
   useEffect(() => {
     if (thumbnail) {
       fetchThumbnail();
@@ -96,7 +89,6 @@ const VideoPlayer = ({ streamer_username, thumbnail = false, alerts = [], platfo
     }
   }, [thumbnail, isOnline, fetchThumbnail]);
 
-  // Update visible alerts after a short delay.
   useEffect(() => {
     const timeout = setTimeout(() => {
       setVisibleAlerts([...alerts, ...detections]);
@@ -104,32 +96,18 @@ const VideoPlayer = ({ streamer_username, thumbnail = false, alerts = [], platfo
     return () => clearTimeout(timeout);
   }, [alerts, detections]);
 
-  // Effect to initialize the Stripchat embedded player when not in thumbnail mode.
-  useEffect(() => {
-    if (platform.toLowerCase() === 'stripchat' && !thumbnail && stripchatCanvasRef.current) {
-      // Replace with your actual configuration.
-      const modelId = 1; // Actual model id
-      const modelToken = 'yourModelToken'; // Actual model token
-      // Construct the snapshot server URL dynamically with the streamer username.
-      const modelSnapshotServer = `https://jpeg.live.mmcdn.com/stream?room=${streamer_username}`;
-      
-      // Initialize and mount the Stripchat player on the canvas.
-      const player = new StripchatPlayer();
-      player.setCanvasRef(stripchatCanvasRef.current)
-            .setModelId(modelId)
-            .setModelToken(modelToken)
-            .setModelSnapshotServer(modelSnapshotServer)
-            .mount();
-    }
-  }, [platform, thumbnail, streamer_username]);
-
-  // Render the embedded player or iframe based on the platform.
   const renderEmbeddedPlayer = () => {
     if (platform.toLowerCase() === 'stripchat') {
       return (
         <div className="embedded-player-container">
-          {/* Canvas element for the Stripchat embedded player */}
-          <canvas id="stripchat-canvas" ref={stripchatCanvasRef} style={{ width: '100%', height: '100%' }} />
+          <iframe
+            src={`https://stripchat.com/embed/${streamer_username}`}
+            className="embedded-player"
+            allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
+            allowFullScreen
+            frameBorder="0"
+            scrolling="no"
+          />
         </div>
       );
     } else {
