@@ -12,8 +12,9 @@ import spacy
 import cv2
 import torch
 import numpy as np
-import psycopg2
-from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
+# Removed psycopg2 and related import as we are switching to SQLite.
+# import psycopg2
+# from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 from flask import Flask, request, jsonify, session, current_app, send_from_directory
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
@@ -160,38 +161,6 @@ def send_chat_telegram_notification(image_path, description):
         print("Error sending chat telegram notification:", e)
 
 # =============================================================================
-# Database Existence Check
-# =============================================================================
-def ensure_database():
-    # Use the EC2 public IP as default so that PostgreSQL is accessible externally.
-    DB_HOST = os.getenv("DB_HOST", "localhost")
-    DB_PORT = os.getenv("DB_PORT", "5432")
-    DB_USER = os.getenv("DB_USER", "postgres")
-    DB_PASSWORD = os.getenv("DB_PASSWORD", "password")
-    NEW_DB_NAME = os.getenv("NEW_DB_NAME", "stream_monitor")
-    try:
-        conn = psycopg2.connect(dbname="postgres", user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT)
-        conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
-        cur = conn.cursor()
-        cur.execute("SELECT 1 FROM pg_database WHERE datname=%s", (NEW_DB_NAME,))
-        exists = cur.fetchone() is not None
-        cur.close()
-        conn.close()
-        if not exists:
-            conn = psycopg2.connect(dbname="postgres", user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT)
-            conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
-            cur = conn.cursor()
-            cur.execute(f"CREATE DATABASE {NEW_DB_NAME};")
-            print(f"Database '{NEW_DB_NAME}' created successfully!")
-            cur.close()
-            conn.close()
-        else:
-            # In production, you likely don't want repeated log messages.
-            print(f"Database '{NEW_DB_NAME}' already exists.")
-    except psycopg2.Error as e:
-        print(f"Error ensuring database: {e}")
-
-# =============================================================================
 # Models & Database Setup
 # =============================================================================
 db = SQLAlchemy()
@@ -302,12 +271,8 @@ class TelegramRecipient(db.Model):
 app = Flask(__name__)
 # Allow API requests from your React frontend hosted at http://54.86.99.85:3000.
 CORS(app, resources={r"/api/*": {"origins": "http://127.0.0.1:3000"}}, supports_credentials=True)
-# Build the SQLALCHEMY_DATABASE_URI from environment variable DB_HOST (defaulting to your EC2 EIP)
-app.config['SQLALCHEMY_DATABASE_URI'] = (
-    'postgresql+psycopg2://postgres:password@' +
-    os.getenv("DB_HOST", "localhost") +
-    '/stream_monitor'
-)
+# Updated SQLALCHEMY_DATABASE_URI to use SQLite.
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///stream_monitor.db'
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
     'pool_size': 200,
     'max_overflow': 4000,
@@ -1165,9 +1130,7 @@ def health():
 # Main Execution
 # =============================================================================
 if __name__ == '__main__':
-    # Only run database initialization if explicitly enabled.
-    if os.getenv("RUN_DB_INIT", "False").lower() in ["true", "1"]:
-        ensure_database()
+    # Removed PostgreSQL-specific database initialization.
     with app.app_context():
         start_monitoring()
         start_notification_monitor()
