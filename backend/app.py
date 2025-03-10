@@ -12,7 +12,6 @@ import spacy
 import cv2
 import torch
 import numpy as np
-import re  # Added for Stripchat URL matching
 # Removed psycopg2 and related import as we are switching to SQLite.
 # import psycopg2
 # from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
@@ -62,64 +61,6 @@ def send_text_message(msg, chat_id, token=None):
 
 # Allowed file types for video uploads.
 ALLOWED_EXTENSIONS = {'mp4', 'avi', 'mov'}
-
-# =============================================================================
-# New Helper Function for Stripchat Integration
-# =============================================================================
-
-# Compiled regex to extract the username from a Stripchat URL.
-_stripchat_re = re.compile(r"https?://(\w+\.)?stripchat\.com/(?P<username>[a-zA-Z0-9_-]+)")
-
-def get_stripchat_thumbnail(room_url):
-    """
-    Fetches live stream info from Stripchat and captures a thumbnail (screenshot)
-    if the model is live and public.
-    
-    Returns:
-        A URL path (string) to the saved thumbnail image (served from /static/) if successful,
-        or None if the model is not live or if an error occurs.
-    """
-    match = _stripchat_re.match(room_url)
-    if not match:
-        return None
-    username = match.group("username")
-    api_call = f"https://stripchat.com/api/front/v2/models/username/{username}/cam"
-    headers = {
-        "Content-Type": "application/x-www-form-urlencoded",
-        "X-Requested-With": "XMLHttpRequest",
-        "Referer": room_url,
-    }
-    try:
-        res = requests.get(api_call, headers=headers, timeout=10)
-        data = res.json()
-        # Check if the model is live and public
-        if data.get("user", {}).get("user", {}).get("isLive") and data.get("user", {}).get("user", {}).get("status") == "public":
-            streamName = data.get("cam", {}).get("streamName")
-            viewServer = data.get("cam", {}).get("viewServers", {}).get("flashphoner-hls")
-            if not streamName or not viewServer:
-                return None
-            # Construct the HLS URL
-            hls_url = f"https://b-{viewServer}.doppiocdn.com/hls/{streamName}/master_{streamName}.m3u8"
-            # Capture a frame from the HLS stream using OpenCV
-            cap = cv2.VideoCapture(hls_url)
-            ret, frame = cap.read()
-            cap.release()
-            if ret:
-                # Save the captured frame as a thumbnail image in a static folder
-                thumbnail_filename = f"{username}_{int(time.time())}.jpg"
-                thumbnail_dir = os.path.join("static", "stripchat_thumbnails")
-                os.makedirs(thumbnail_dir, exist_ok=True)
-                thumbnail_path = os.path.join(thumbnail_dir, thumbnail_filename)
-                cv2.imwrite(thumbnail_path, frame)
-                # Return the URL path to the thumbnail (assuming static files are served from /static)
-                return f"/static/stripchat_thumbnails/{thumbnail_filename}"
-            else:
-                return None
-        else:
-            return None
-    except Exception as e:
-        print("Error fetching Stripchat live info:", e)
-        return None
 
 # =============================================================================
 # Telegram Notification Functions with Fancy Annotations
@@ -988,19 +929,11 @@ def get_dashboard():
     data = []
     for stream in streams:
         assignment = Assignment.query.filter_by(stream_id=stream.id).first()
-        stream_data = {
+        data.append({
             **stream.serialize(),
             "agent": assignment.agent.serialize() if assignment else None,
             "confidence": 0.8
-        }
-        # For Stripchat streams, fetch the live thumbnail; otherwise, use a default thumbnail.
-        if stream.platform.lower() == "stripchat":
-            thumbnail = get_stripchat_thumbnail(stream.room_url)
-            stream_data["thumbnail"] = thumbnail if thumbnail else ""
-        else:
-            streamer = stream.room_url.rstrip('/').split('/')[-1]
-            stream_data["thumbnail"] = f'https://jpeg.live.mmcdn.com/stream?room={streamer}&f=0.8399472484345041'
-        data.append(stream_data)
+        })
     return jsonify({"ongoing_streams": len(data), "streams": data})
 
 @app.route('/api/agent/dashboard', methods=['GET'])

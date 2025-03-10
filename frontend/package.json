@@ -10,8 +10,8 @@
   },
   "scripts": {
     "start": "serve -s app -l 8080",
-    "devstart": "react-scripts start",
-    "build": "react-scripts build"
+    "devstart": "export NODE_OPTIONS=--openssl-legacy-provider && react-scripts start",
+    "build": "export NODE_OPTIONS=--openssl-legacy-provider && react-scripts build"
   },
   "proxy": "http://0.0.0.0:5000",
   "browserslist": {
