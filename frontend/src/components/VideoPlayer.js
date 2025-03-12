@@ -1,7 +1,67 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import axios from 'axios';
 
-const VideoPlayer = ({ streamer_username, thumbnail = false, alerts = [], platform = 'cbxyz' }) => {
+/**
+ * HlsPlayer Component
+ * 
+ * A simple React component that uses HLS.js to load an HLS stream.
+ * Assumes HLS.js is loaded globally via a script tag in index.html.
+ */
+const HlsPlayer = ({ src, ...props }) => {
+  const videoRef = useRef(null);
+
+  useEffect(() => {
+    let hls;
+    const video = videoRef.current;
+
+    if (video) {
+      // If the browser supports HLS natively (e.g., Safari)
+      if (video.canPlayType('application/vnd.apple.mpegurl')) {
+        video.src = src;
+      } else if (window.Hls) {
+        // Otherwise, use HLS.js if available
+        hls = new window.Hls();
+        hls.loadSource(src);
+        hls.attachMedia(video);
+        hls.on(window.Hls.Events.ERROR, (event, data) => {
+          console.error('HLS.js error:', data);
+        });
+      } else {
+        console.error('HLS is not supported in this browser.');
+      }
+    }
+    return () => {
+      if (hls) {
+        hls.destroy();
+      }
+    };
+  }, [src]);
+
+  return (
+    <video
+      ref={videoRef}
+      controls
+      autoPlay
+      playsInline
+      style={{ width: '100%', height: '100%' }}
+      {...props}
+    />
+  );
+};
+
+/**
+ * VideoPlayer Component
+ * 
+ * Renders a live video stream using either a thumbnail or an embedded player.
+ * Uses platform-specific players for different streaming platforms.
+ */
+const VideoPlayer = ({ 
+  streamer_username, 
+  thumbnail = false, 
+  alerts = [], 
+  platform = 'chaturbate', // default platform set to 'chaturbate'
+  streamerUid // Expected for Stripchat HLS stream URL
+}) => {
   const [thumbnailError, setThumbnailError] = useState(false);
   const [visibleAlerts, setVisibleAlerts] = useState([]);
   const [currentFrame, setCurrentFrame] = useState(null);
@@ -10,6 +70,7 @@ const VideoPlayer = ({ streamer_username, thumbnail = false, alerts = [], platfo
   const retryTimeout = useRef(null);
   const detectionActive = useRef(false);
 
+  // Object detection logic for thumbnails
   const detectObjects = useCallback(async (imageUrl) => {
     try {
       const base64Data = imageUrl.split(',')[1];
@@ -24,6 +85,7 @@ const VideoPlayer = ({ streamer_username, thumbnail = false, alerts = [], platfo
     }
   }, [streamer_username]);
 
+  // Fetch thumbnail from the appropriate source based on platform
   const fetchThumbnail = useCallback(async () => {
     if (!isOnline || detectionActive.current || !thumbnail) return;
 
@@ -31,16 +93,20 @@ const VideoPlayer = ({ streamer_username, thumbnail = false, alerts = [], platfo
       detectionActive.current = true;
       const timestamp = Date.now();
       
-      // Use different thumbnail endpoints based on platform
+      // Determine thumbnail URL based on platform
       let thumbnailUrl;
-      if (platform.toLowerCase() === 'stripchat') {
-        thumbnailUrl = `https://img.strpst.com/thumbs/${streamer_username}?t=${timestamp}`;
+      if (platform.toLowerCase() === 'stripchat' && streamerUid) {
+        // Use new Stripchat thumbnail URL
+        thumbnailUrl = `https://img.doppiocdn.com/thumbs/1741753200/${streamerUid}_webp`;
+      } else if (platform.toLowerCase() === 'chaturbate') {
+        // Default to Chaturbate thumbnail URL
+        thumbnailUrl = `https://jpeg.live.mmcdn.com/stream?room=${streamer_username}&t=${timestamp}`;
       } else {
+        // Fallback thumbnail URL for other platforms
         thumbnailUrl = `https://jpeg.live.mmcdn.com/stream?room=${streamer_username}&t=${timestamp}`;
       }
       
       const res = await fetch(thumbnailUrl);
-      
       if (!res.ok) throw new Error('Stream offline');
       
       const blob = await res.blob();
@@ -62,15 +128,16 @@ const VideoPlayer = ({ streamer_username, thumbnail = false, alerts = [], platfo
     } finally {
       detectionActive.current = false;
     }
-  }, [isOnline, streamer_username, thumbnail, detectObjects, platform]);
+  }, [isOnline, streamer_username, thumbnail, detectObjects, platform, streamerUid]);
 
+  // Handle offline state and retry logic
   const handleOfflineState = (error) => {
     console.error('Stream offline:', error);
     setThumbnailError(true);
     setIsOnline(false);
     clearTimeout(retryTimeout.current);
     
-    const baseDelay = 60000 * Math.pow(2, 3); // 8 minutes max
+    const baseDelay = 60000 * Math.pow(2, 3); // 8 minutes max delay
     const jitter = Math.random() * 15000;
     retryTimeout.current = setTimeout(() => {
       setIsOnline(true);
@@ -78,6 +145,7 @@ const VideoPlayer = ({ streamer_username, thumbnail = false, alerts = [], platfo
     }, baseDelay + jitter);
   };
 
+  // Set interval to fetch thumbnails if in thumbnail mode
   useEffect(() => {
     if (thumbnail) {
       fetchThumbnail();
@@ -89,6 +157,7 @@ const VideoPlayer = ({ streamer_username, thumbnail = false, alerts = [], platfo
     }
   }, [thumbnail, isOnline, fetchThumbnail]);
 
+  // Merge alerts and detections after a slight delay
   useEffect(() => {
     const timeout = setTimeout(() => {
       setVisibleAlerts([...alerts, ...detections]);
@@ -96,12 +165,40 @@ const VideoPlayer = ({ streamer_username, thumbnail = false, alerts = [], platfo
     return () => clearTimeout(timeout);
   }, [alerts, detections]);
 
+  // Render embedded player depending on platform and provided props
   const renderEmbeddedPlayer = () => {
     if (platform.toLowerCase() === 'stripchat') {
+      // Platform-specific embedded player for Stripchat using HLS
+      if (streamerUid) {
+        return (
+          <div className="embedded-player-container">
+            <HlsPlayer 
+              src={`https://b-hls-06.doppiocdn.live/hls/${streamerUid}/${streamerUid}.m3u8`}
+              className="embedded-player" 
+            />
+          </div>
+        );
+      }
+      // Fallback to a clickable link if no streamerUid is available.
+      return (
+        <div className="no-embedded-player">
+          <p>Embedded player is not supported on Stripchat without a valid streamer UID. Please click the link below to watch the live stream.</p>
+          <a 
+            href={`https://b-hls-06.doppiocdn.live/hls/${streamerUid}/${streamerUid}.m3u8`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="stream-link"
+          >
+            Watch Live Stream
+          </a>
+        </div>
+      );
+    } else if (platform.toLowerCase() === 'chaturbate') {
+      // Platform-specific embedded player for Chaturbate using an iframe
       return (
         <div className="embedded-player-container">
           <iframe
-            src={`https://stripchat.com/embed/${streamer_username}`}
+            src={`https://chaturbate.com/in/?room=${streamer_username}&autoplay=1`}
             className="embedded-player"
             allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
             allowFullScreen
@@ -111,6 +208,7 @@ const VideoPlayer = ({ streamer_username, thumbnail = false, alerts = [], platfo
         </div>
       );
     } else {
+      // Fallback embedded player for other platforms
       return (
         <div className="embedded-player-container">
           <iframe
@@ -181,7 +279,8 @@ const VideoPlayer = ({ streamer_username, thumbnail = false, alerts = [], platfo
         }
 
         .thumbnail-wrapper,
-        .embedded-player-container {
+        .embedded-player-container,
+        .no-embedded-player {
           position: absolute;
           top: 0;
           left: 0;
@@ -216,6 +315,31 @@ const VideoPlayer = ({ streamer_username, thumbnail = false, alerts = [], platfo
           height: 100%;
           border: none;
           background: #000;
+        }
+
+        .no-embedded-player {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          background: #1a1a1a;
+          color: #fff;
+          text-align: center;
+          padding: 20px;
+        }
+
+        .stream-link {
+          margin-top: 10px;
+          padding: 10px 20px;
+          background: #007bff;
+          color: #fff;
+          border-radius: 4px;
+          text-decoration: none;
+          transition: background 0.3s ease;
+        }
+
+        .stream-link:hover {
+          background: #0056b3;
         }
 
         .detection-overlay {

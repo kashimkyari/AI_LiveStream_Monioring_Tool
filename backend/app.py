@@ -1,6 +1,7 @@
 #!/usr/bin/env python
-# This is the full updated app.py with robust monitoring and optimized concurrent livestream handling.
-# Telegram notifications have been updated to use synchronous calls.
+# This is the full updated app.py with robust monitoring, optimized concurrent livestream handling,
+# and a sophisticated asynchronous scraper for Stripchat with progress reporting and detailed logging.
+# Telegram notifications remain synchronous.
 
 import os
 import sys
@@ -14,6 +15,7 @@ import torch
 import numpy as np
 import logging
 import concurrent.futures
+import re  # For scraping regex matching
 from flask import Flask, request, jsonify, session, current_app, send_from_directory
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
@@ -33,6 +35,9 @@ import shutil
 from collections import defaultdict
 from spacy.matcher import Matcher
 from telegram import Bot
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+import m3u8
 
 # =============================================================================
 # Logging Configuration
@@ -65,7 +70,7 @@ def send_text_message(msg, chat_id, token=None):
     bot_instance.sendMessage(chat_id=chat_id, text=msg)
 
 # Allowed file types for video uploads.
-ALLOWED_EXTENSIONS = {'mp4', 'avi', 'mov'}
+ALLOWED_EXTENSIONS = {"mp4", "avi", "mov"}
 
 # =============================================================================
 # Telegram Notification Functions with Fancy Annotations (Synchronous Version)
@@ -77,7 +82,7 @@ def send_full_telegram_notification_sync(log, detections):
     """
     try:
         room_url = log.room_url
-        streamer = room_url.rstrip('/').split('/')[-1]
+        streamer = room_url.rstrip("/").split("/")[-1]
         stream = Stream.query.filter_by(room_url=room_url).first()
         if stream:
             platform = stream.platform
@@ -92,14 +97,15 @@ def send_full_telegram_notification_sync(log, detections):
         agent_name = f"{agent.firstname} {agent.lastname}" if agent else "None"
         timestamp = log.timestamp.strftime("%Y-%m-%d %H:%M:%S")
 
-        # Build caption with all detections.
         caption = "🚨 Detection Alert!\nDetections:\n"
         for det in detections:
             caption += f"- {det.get('class', 'object')}: {det.get('confidence', 0):.2f}\n"
-        caption += (f"Streamer: {streamer_name}\n"
-                    f"Platform: {platform}\n"
-                    f"Agent: {agent_name}\n"
-                    f"Timestamp: {timestamp}")
+        caption += (
+            f"Streamer: {streamer_name}\n"
+            f"Platform: {platform}\n"
+            f"Agent: {agent_name}\n"
+            f"Timestamp: {timestamp}"
+        )
 
         thumbnail_url = f"https://jpeg.live.mmcdn.com/stream?room={streamer}"
         response = requests.get(thumbnail_url, stream=True, timeout=128)
@@ -107,11 +113,10 @@ def send_full_telegram_notification_sync(log, detections):
             image_data = response.content
             nparr = np.frombuffer(image_data, np.uint8)
             img_cv = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-            # Annotate the image with all detections.
             for detection in detections:
-                box = detection.get('box')
-                class_name = detection.get('class', 'object')
-                confidence = detection.get('confidence', 0)
+                box = detection.get("box")
+                class_name = detection.get("class", "object")
+                confidence = detection.get("confidence", 0)
                 if box:
                     x1, y1, x2, y2 = map(int, box)
                     cv2.rectangle(img_cv, (x1, y1), (x2, y2), (0, 255, 0), 2)
@@ -119,7 +124,7 @@ def send_full_telegram_notification_sync(log, detections):
                     (w, h), baseline = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)
                     cv2.rectangle(img_cv, (x1, y1 - h - baseline), (x1 + w, y1), (0, 255, 0), -1)
                     cv2.putText(img_cv, label, (x1, y1 - baseline), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
-            retval, buffer = cv2.imencode('.jpg', img_cv)
+            retval, buffer = cv2.imencode(".jpg", img_cv)
             annotated_image_io = BytesIO(buffer.tobytes())
             annotated_image_io.seek(0)
             img_io = annotated_image_io
@@ -127,8 +132,6 @@ def send_full_telegram_notification_sync(log, detections):
             img_io = thumbnail_url
 
         bot_instance = get_bot()
-
-        # Notify assigned agent if exists.
         if agent:
             agent_recipient = TelegramRecipient.query.filter_by(telegram_username=agent.username).first()
             if agent_recipient:
@@ -136,8 +139,6 @@ def send_full_telegram_notification_sync(log, detections):
                     bot_instance.send_photo(chat_id=agent_recipient.chat_id, photo=img_io, caption=caption)
                 except Exception as e:
                     logging.error("Error sending to agent: %s", e)
-
-        # Notify all admin recipients.
         admin_recipients = TelegramRecipient.query.all()
         for recipient in admin_recipients:
             if agent and recipient.telegram_username == agent.username:
@@ -164,7 +165,7 @@ def send_chat_telegram_notification(image_path, description):
 db = SQLAlchemy()
 
 class User(db.Model):
-    __tablename__ = 'users'
+    __tablename__ = "users"
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False)
     email = db.Column(db.String(120), unique=True, nullable=False)
@@ -173,47 +174,99 @@ class User(db.Model):
     phonenumber = db.Column(db.String(20), nullable=False)
     staffid = db.Column(db.String(20))
     password = db.Column(db.String(120), nullable=False)
-    role = db.Column(db.String(10), nullable=False, default='agent')
-    assignments = db.relationship('Assignment', back_populates='agent')
+    role = db.Column(db.String(10), nullable=False, default="agent")
+    assignments = db.relationship("Assignment", back_populates="agent")
 
     def serialize(self):
         return {
-            'id': self.id,
-            'username': self.username,
-            'email': self.email,
-            'firstname': self.firstname,
-            'lastname': self.lastname,
-            'phonenumber': self.phonenumber,
-            'staffid': self.staffid,
-            'role': self.role
+            "id": self.id,
+            "username": self.username,
+            "email": self.email,
+            "firstname": self.firstname,
+            "lastname": self.lastname,
+            "phonenumber": self.phonenumber,
+            "staffid": self.staffid,
+            "role": self.role,
         }
 
 class Stream(db.Model):
-    __tablename__ = 'streams'
+    __tablename__ = "streams"
     id = db.Column(db.Integer, primary_key=True)
     room_url = db.Column(db.String(300), unique=True, nullable=False)
-    platform = db.Column(db.String(50), nullable=False, default='Chaturbate')
     streamer_username = db.Column(db.String(100))
-    assignments = db.relationship('Assignment', back_populates='stream')
+    # Discriminator column to differentiate the stream type
+    type = db.Column(db.String(50))
+    
+    # Relationship to assignments (polymorphic join)
+    assignments = db.relationship("Assignment", back_populates="stream")
+    
+    __mapper_args__ = {
+        'polymorphic_on': type,
+        'polymorphic_identity': 'stream',  # base identity
+        'with_polymorphic': '*'
+    }
 
     def serialize(self):
+        # Base serialization for common fields
         return {
-            'id': self.id,
-            'room_url': self.room_url,
-            'platform': self.platform,
-            'streamer_username': self.streamer_username
+            "id": self.id,
+            "room_url": self.room_url,
+            "streamer_username": self.streamer_username,
+            "platform": self.type.capitalize() if self.type else None,
         }
 
+class ChaturbateStream(Stream):
+    __tablename__ = "chaturbate_streams"
+    id = db.Column(db.Integer, db.ForeignKey("streams.id"), primary_key=True)
+    # No extra fields for Chaturbate, so we rely on the base fields
+
+    __mapper_args__ = {
+        'polymorphic_identity': 'chaturbate'
+    }
+
+    def serialize(self):
+        # Extend the base serialization with a fixed platform value
+        data = super().serialize()
+        data["platform"] = "Chaturbate"
+        return data
+
+class StripchatStream(Stream):
+    __tablename__ = "stripchat_streams"
+    id = db.Column(db.Integer, db.ForeignKey("streams.id"), primary_key=True)
+    # Stripchat-specific fields
+    streamer_uid = db.Column(db.String(50), nullable=True)
+    edge_server_url = db.Column(db.String(300), nullable=True)
+    blob_url = db.Column(db.String(300), nullable=True)
+    static_thumbnail = db.Column(db.String(300), nullable=True)
+
+    __mapper_args__ = {
+        'polymorphic_identity': 'stripchat'
+    }
+
+    def serialize(self):
+        # Extend the base serialization with Stripchat-specific details
+        data = super().serialize()
+        data.update({
+            "platform": "Stripchat",
+            "streamer_uid": self.streamer_uid,
+            "edge_server_url": self.edge_server_url,
+            "blob_url": self.blob_url,
+            "static_thumbnail": self.static_thumbnail,
+        })
+        return data
+
 class Assignment(db.Model):
-    __tablename__ = 'assignments'
+    __tablename__ = "assignments"
     id = db.Column(db.Integer, primary_key=True)
-    agent_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
-    stream_id = db.Column(db.Integer, db.ForeignKey('streams.id'), nullable=False)
-    agent = db.relationship('User', back_populates='assignments')
-    stream = db.relationship('Stream', back_populates='assignments')
+    agent_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
+    # Reference the base streams table; SQLAlchemy loads the appropriate subclass.
+    stream_id = db.Column(db.Integer, db.ForeignKey("streams.id"), nullable=False)
+    
+    agent = db.relationship("User", back_populates="assignments")
+    stream = db.relationship("Stream", back_populates="assignments")
 
 class Log(db.Model):
-    __tablename__ = 'logs'
+    __tablename__ = "logs"
     id = db.Column(db.Integer, primary_key=True)
     timestamp = db.Column(db.DateTime(timezone=True), default=datetime.utcnow)
     room_url = db.Column(db.String(300))
@@ -222,45 +275,45 @@ class Log(db.Model):
 
     def serialize(self):
         return {
-            'id': self.id,
-            'timestamp': self.timestamp.isoformat(),
-            'room_url': self.room_url,
-            'event_type': self.event_type,
-            'details': self.details
+            "id": self.id,
+            "timestamp": self.timestamp.isoformat(),
+            "room_url": self.room_url,
+            "event_type": self.event_type,
+            "details": self.details,
         }
 
 class ChatKeyword(db.Model):
-    __tablename__ = 'chat_keywords'
+    __tablename__ = "chat_keywords"
     id = db.Column(db.Integer, primary_key=True)
     keyword = db.Column(db.String(100), unique=True, nullable=False)
 
     def serialize(self):
-        return {'id': self.id, 'keyword': self.keyword}
+        return {"id": self.id, "keyword": self.keyword}
 
 class FlaggedObject(db.Model):
-    __tablename__ = 'flagged_objects'
+    __tablename__ = "flagged_objects"
     id = db.Column(db.Integer, primary_key=True)
     object_name = db.Column(db.String(100), unique=True, nullable=False)
     confidence_threshold = db.Column(db.Numeric(3, 2), default=0.8)
 
     def serialize(self):
         return {
-            'id': self.id,
-            'object_name': self.object_name,
-            'confidence_threshold': float(self.confidence_threshold)
+            "id": self.id,
+            "object_name": self.object_name,
+            "confidence_threshold": float(self.confidence_threshold),
         }
 
 class TelegramRecipient(db.Model):
-    __tablename__ = 'telegram_recipients'
+    __tablename__ = "telegram_recipients"
     id = db.Column(db.Integer, primary_key=True)
     telegram_username = db.Column(db.String(50), unique=True, nullable=False)
     chat_id = db.Column(db.String(50), nullable=False)
 
     def serialize(self):
         return {
-            'id': self.id,
-            'telegram_username': self.telegram_username,
-            'chat_id': self.chat_id
+            "id": self.id,
+            "telegram_username": self.telegram_username,
+            "chat_id": self.chat_id,
         }
 
 # =============================================================================
@@ -268,22 +321,22 @@ class TelegramRecipient(db.Model):
 # =============================================================================
 app = Flask(__name__)
 CORS(app, resources={r"/api/*": {"origins": "http://127.0.0.1:3000"}}, supports_credentials=True)
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///stream_monitor.db'
-app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
-    'pool_size': 200,
-    'max_overflow': 4000,
-    'pool_timeout': 600,
-    'pool_recycle': 3600,
-    'pool_pre_ping': True
+app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///stream_monitor.db"
+app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
+    "pool_size": 200,
+    "max_overflow": 4000,
+    "pool_timeout": 600,
+    "pool_recycle": 3600,
+    "pool_pre_ping": True,
 }
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config['SECRET_KEY'] = 'supersecretkey'
-app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=1)
-app.config['UPLOAD_FOLDER'] = 'uploads'
-app.config['CHAT_IMAGES_FOLDER'] = os.path.join(app.config['UPLOAD_FOLDER'], 'chat_images')
-app.config['FLAGGED_CHAT_IMAGES_FOLDER'] = os.path.join(app.config['UPLOAD_FOLDER'], 'flagged_chat_images')
-os.makedirs(app.config['CHAT_IMAGES_FOLDER'], exist_ok=True)
-os.makedirs(app.config['FLAGGED_CHAT_IMAGES_FOLDER'], exist_ok=True)
+app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+app.config["SECRET_KEY"] = "supersecretkey"
+app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=1)
+app.config["UPLOAD_FOLDER"] = "uploads"
+app.config["CHAT_IMAGES_FOLDER"] = os.path.join(app.config["UPLOAD_FOLDER"], "chat_images")
+app.config["FLAGGED_CHAT_IMAGES_FOLDER"] = os.path.join(app.config["UPLOAD_FOLDER"], "flagged_chat_images")
+os.makedirs(app.config["CHAT_IMAGES_FOLDER"], exist_ok=True)
+os.makedirs(app.config["FLAGGED_CHAT_IMAGES_FOLDER"], exist_ok=True)
 
 db.init_app(app)
 
@@ -293,48 +346,139 @@ def shutdown_session(exception=None):
 
 with app.app_context():
     db.create_all()
-    if not User.query.filter_by(role='admin').first():
+    if not User.query.filter_by(role="admin").first():
         admin = User(
-            username='admin',
-            password='admin',
-            email='admin@example.com',
-            firstname='Admin',
-            lastname='User',
-            phonenumber='000-000-0000',
-            role='admin'
+            username="admin",
+            password="admin",
+            email="admin@example.com",
+            firstname="Admin",
+            lastname="User",
+            phonenumber="000-000-0000",
+            role="admin",
         )
         db.session.add(admin)
         db.session.commit()
-    if not User.query.filter_by(role='agent').first():
+    if not User.query.filter_by(role="agent").first():
         agent = User(
-            username='agent',
-            password='agent',
-            email='agent@example.com',
-            firstname='Agent',
-            lastname='User',
-            phonenumber='111-111-1111',
-            role='agent'
+            username="agent",
+            password="agent",
+            email="agent@example.com",
+            firstname="Agent",
+            lastname="User",
+            phonenumber="111-111-1111",
+            role="agent",
         )
         db.session.add(agent)
         db.session.commit()
+
+# =============================================================================
+# Asynchronous Scraping Job Setup
+# =============================================================================
+scrape_jobs = {}
+
+def update_job_progress(job_id, percent, message):
+    """Update the progress of a scrape job and log the progress."""
+    scrape_jobs[job_id] = {
+        "progress": percent,
+        "message": message,
+    }
+    logging.info("Job %s progress: %s%% - %s", job_id, percent, message)
+
+def scrape_stripchat_data(url, progress_callback=None):
+    """
+    Robustly scrapes the given Stripchat URL to extract:
+      - The streamer UID (by scraping the static thumbnail)
+      - Constructs the HLS URL in the format:
+            https://b-hls-06.doppiocdn.live/hls/{streamer_uid}/{streamer_uid}_160p.m3u8?playlistType=lowLatency
+      - Retrieves the static thumbnail URL from the page.
+    Blob URL extraction is not used.
+    Reports progress via progress_callback (percent, message).
+    """
+    session = requests.Session()
+    retries = Retry(total=3, backoff_factor=1, status_forcelist=[406, 429, 500, 502, 503, 504])
+    adapter = HTTPAdapter(max_retries=retries)
+    session.mount("https://", adapter)
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    }
+    try:
+        if progress_callback:
+            progress_callback(10, "Fetching Stripchat page")
+        response = session.get(url, timeout=10, headers=headers)
+        html = response.text if response.text else ""
+        logging.info("Fetched page for URL: %s", url)
+        if progress_callback:
+            progress_callback(30, "Parsing HTML")
+        # Extract static thumbnail URL from the page.
+        pattern_static = r'<img[^>]+src="(https://img\.doppiocdn\.com/thumbs/[^"]+_webp)"'
+        match_static = re.search(pattern_static, html)
+        if match_static:
+            static_thumbnail = match_static.group(1)
+            logging.info("Static thumbnail found: %s", static_thumbnail)
+        else:
+            static_thumbnail = None
+            logging.warning("No static thumbnail found for URL: %s", url)
+        if not static_thumbnail:
+            if progress_callback:
+                progress_callback(100, "Error: Static thumbnail not found")
+            return None
+        # Extract streamer UID from the thumbnail URL.
+        match_uid = re.search(r"/(\d+)_webp", static_thumbnail)
+        if match_uid:
+            uid = match_uid.group(1)
+        else:
+            logging.error("Failed to extract streamer UID from thumbnail: %s", static_thumbnail)
+            if progress_callback:
+                progress_callback(100, "Error: UID extraction failed")
+            return None
+        # Construct the new HLS URL using the provided base link.
+        new_edge_url = f"https://b-hls-06.doppiocdn.live/hls/{uid}/{uid}.m3u8"
+        if progress_callback:
+            progress_callback(80, "Extracting streamer details")
+        result = {
+            "streamer_uid": uid,
+            "edge_server_url": new_edge_url,
+            "blob_url": None,
+            "static_thumbnail": static_thumbnail,
+        }
+        logging.info("Scraped details: %s", result)
+        if progress_callback:
+            progress_callback(100, "Scraping complete")
+        return result
+    except Exception as e:
+        logging.error("Error scraping Stripchat URL %s: %s", url, e)
+        if progress_callback:
+            progress_callback(100, f"Error: {e}")
+        return None
+
+def run_scrape_job(job_id, url):
+    """Background job to run the scraper and update progress in the global dictionary."""
+    update_job_progress(job_id, 0, "Starting scrape job")
+    result = scrape_stripchat_data(url, progress_callback=lambda p, m: update_job_progress(job_id, p, m))
+    if result:
+        scrape_jobs[job_id]["result"] = result
+    else:
+        scrape_jobs[job_id]["error"] = "Scraping failed"
+    update_job_progress(job_id, 100, scrape_jobs[job_id].get("error", "Scraping complete"))
 
 # =============================================================================
 # Utility Functions & Decorators
 # =============================================================================
 
 def allowed_file(filename):
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+    return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
 
 def login_required(role=None):
     def decorator(f):
         from functools import wraps
         @wraps(f)
         def decorated_function(*args, **kwargs):
-            if 'user_id' not in session:
-                return jsonify({'message': 'Authentication required'}), 401
-            user = db.session.get(User, session['user_id'])
+            if "user_id" not in session:
+                return jsonify({"message": "Authentication required"}), 401
+            user = db.session.get(User, session["user_id"])
             if role and (user is None or user.role != role):
-                return jsonify({'message': 'Unauthorized'}), 403
+                return jsonify({"message": "Unauthorized"}), 403
             return f(*args, **kwargs)
         return decorated_function
     return decorator
@@ -378,13 +522,12 @@ def detect_chat(stream_url=""):
             detected.add(span.text)
     if detected:
         return {
-            'status': 'flagged',
-            'keywords': list(detected),
-            'message': sample_message
+            "status": "flagged",
+            "keywords": list(detected),
+            "message": sample_message,
         }
-    return {'status': 'clean'}
+    return {"status": "clean"}
 
-# Global lock to ensure thread-safe access to the YOLO model.
 detection_lock = threading.Lock()
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -397,10 +540,10 @@ def update_flagged_objects():
     global flagged_objects
     with app.app_context():
         objects = FlaggedObject.query.all()
-        flagged_objects = [{
-            'name': obj.object_name.lower(),
-            'threshold': float(obj.confidence_threshold)
-        } for obj in objects]
+        flagged_objects = [
+            {"name": obj.object_name.lower(), "threshold": float(obj.confidence_threshold)}
+            for obj in objects
+        ]
 
 def detect_frame(frame):
     frame = cv2.resize(frame, (640, 480))
@@ -417,12 +560,12 @@ def detect_frame(frame):
                     class_name = model.names.get(class_id, "unknown").lower()
                 else:
                     class_name = model.names[class_id].lower() if class_id < len(model.names) else "unknown"
-                flagged_obj = next((obj for obj in flagged_objects if obj['name'] == class_name), None)
-                if flagged_obj and conf >= flagged_obj['threshold']:
+                flagged_obj = next((obj for obj in flagged_objects if obj["name"] == class_name), None)
+                if flagged_obj and conf >= flagged_obj["threshold"]:
                     detections.append({
-                        'class': class_name,
-                        'confidence': float(conf),
-                        'box': [float(x1), float(y1), float(x2), float(y2)]
+                        "class": class_name,
+                        "confidence": float(conf),
+                        "box": [float(x1), float(y1), float(x2), float(y2)]
                     })
     except Exception as e:
         logging.error("Error during frame detection: %s", e)
@@ -439,7 +582,7 @@ def monitor_stream(stream_url):
     """
     max_retries = 5
     cooldown = 60
-    max_sleep = 300  # Cap the backoff time
+    max_sleep = 300
     retries = 0
     session_requests = requests.Session()
     while True:
@@ -449,34 +592,31 @@ def monitor_stream(stream_url):
                 logging.info("Stream %s not found. Exiting monitor.", stream_url)
                 return
 
-            streamer = stream_url.rstrip('/').split('/')[-1]
+            streamer = stream_url.rstrip("/").split("/")[-1]
             try:
                 thumbnail_url = f"https://jpeg.live.mmcdn.com/stream?room={streamer}"
                 response = session_requests.get(thumbnail_url, stream=True, timeout=10)
                 if response.status_code != 200:
                     raise Exception("Thumbnail fetch failed")
-                
-                img = Image.open(BytesIO(response.content)).convert('RGB')
+                img = Image.open(BytesIO(response.content)).convert("RGB")
                 detection_id = str(uuid.uuid4())
                 image_path = f"detections/{detection_id}.jpg"
                 os.makedirs(os.path.dirname(image_path), exist_ok=True)
                 img.save(image_path)
-                
                 update_flagged_objects()
                 frame = np.array(img)
                 detections = detect_frame(frame)
-                
                 if detections:
                     detection_data = {
-                        'detections': detections,
-                        'image_url': f"/detection-images/{detection_id}.jpg",
-                        'stream_id': stream.id,
-                        'timestamp': datetime.utcnow().isoformat()
+                        "detections": detections,
+                        "image_url": f"/detection-images/{detection_id}.jpg",
+                        "stream_id": stream.id,
+                        "timestamp": datetime.utcnow().isoformat(),
                     }
                     log_entry = Log(
                         room_url=stream_url,
-                        event_type='object_detection',
-                        details=detection_data
+                        event_type="object_detection",
+                        details=detection_data,
                     )
                     db.session.add(log_entry)
                     db.session.commit()
@@ -495,7 +635,7 @@ def start_monitoring():
     with app.app_context():
         streams = Stream.query.all()
         if len(streams) > 20:
-            logging.warning("Number of streams (%s) exceeds max concurrent limit (20). Some streams may not be monitored concurrently.", len(streams))
+            logging.warning("Number of streams (%s) exceeds max concurrent limit (20).", len(streams))
         for stream in streams:
             monitoring_executor.submit(monitor_stream, stream.room_url)
             logging.info("Submitted monitoring task for %s", stream.room_url)
@@ -508,10 +648,10 @@ def start_notification_monitor():
                 with app.app_context():
                     logs = Log.query.filter(
                         Log.timestamp > last_notified_time,
-                        Log.event_type == 'object_detection'
+                        Log.event_type == "object_detection"
                     ).all()
                     for log in logs:
-                        detections = log.details.get('detections', [])
+                        detections = log.details.get("detections", [])
                         if detections:
                             send_full_telegram_notification_sync(log, detections)
                     if logs:
@@ -525,54 +665,44 @@ def start_notification_monitor():
 # Chat & Detection Image Cleanup Functions
 # =============================================================================
 
-@app.route('/api/detect-chat', methods=['POST'])
+@app.route("/api/detect-chat", methods=["POST"])
 def detect_chat_from_image():
-    if 'chat_image' not in request.files:
-        return jsonify({'message': 'No chat image provided'}), 400
-
-    file = request.files['chat_image']
+    if "chat_image" not in request.files:
+        return jsonify({"message": "No chat image provided"}), 400
+    file = request.files["chat_image"]
     filename = secure_filename(file.filename)
     if not filename:
-        return jsonify({'message': 'Invalid filename'}), 400
-
+        return jsonify({"message": "Invalid filename"}), 400
     timestamp = int(time.time() * 1000)
     new_filename = f"{timestamp}_{filename}"
-    chat_image_path = os.path.join(app.config['CHAT_IMAGES_FOLDER'], new_filename)
+    chat_image_path = os.path.join(app.config["CHAT_IMAGES_FOLDER"], new_filename)
     file.save(chat_image_path)
-
     image = Image.open(chat_image_path)
     ocr_text = pytesseract.image_to_string(image)
-
     update_flagged_keywords()
-
-    detected_keywords = []
-    for keyword in flagged_keywords:
-        if keyword.lower() in ocr_text.lower():
-            detected_keywords.append(keyword)
-
+    detected_keywords = [kw for kw in flagged_keywords if kw.lower() in ocr_text.lower()]
     if detected_keywords:
         flagged_filename = f"flagged_{new_filename}"
-        flagged_filepath = os.path.join(app.config['FLAGGED_CHAT_IMAGES_FOLDER'], flagged_filename)
+        flagged_filepath = os.path.join(app.config["FLAGGED_CHAT_IMAGES_FOLDER"], flagged_filename)
         shutil.move(chat_image_path, flagged_filepath)
-
-        description = ("Chat flagged: Detected keywords " + ", ".join(detected_keywords) +
-                       ". OCR text: " + ocr_text)
-
+        description = (
+            "Chat flagged: Detected keywords " + ", ".join(detected_keywords) +
+            ". OCR text: " + ocr_text
+        )
         log_entry = Log(
             room_url="chat",
-            event_type='chat_detection',
-            details={'keywords': detected_keywords, 'ocr_text': ocr_text}
+            event_type="chat_detection",
+            details={"keywords": detected_keywords, "ocr_text": ocr_text},
         )
         db.session.add(log_entry)
         db.session.commit()
-
         send_chat_telegram_notification(flagged_filepath, description)
-        return jsonify({'message': 'Flagged keywords detected', 'keywords': detected_keywords})
+        return jsonify({"message": "Flagged keywords detected", "keywords": detected_keywords})
     else:
-        return jsonify({'message': 'No flagged keywords detected'})
+        return jsonify({"message": "No flagged keywords detected"})
 
 def cleanup_chat_images():
-    chat_folder = app.config['CHAT_IMAGES_FOLDER']
+    chat_folder = app.config["CHAT_IMAGES_FOLDER"]
     now = time.time()
     for filename in os.listdir(chat_folder):
         filepath = os.path.join(chat_folder, filename)
@@ -624,303 +754,342 @@ def start_detection_cleanup_thread():
 # API Routes
 # =============================================================================
 
-@app.route('/api/login', methods=['POST'])
+@app.route("/api/login", methods=["POST"])
 def login():
     data = request.get_json()
-    username = data.get('username')
+    username = data.get("username")
     user = User.query.filter(
-        (User.username == username) | 
-        (User.email == username)
-    ).filter_by(password=data.get('password')).first()
+        (User.username == username) | (User.email == username)
+    ).filter_by(password=data.get("password")).first()
     if user:
         session.permanent = True
-        session['user_id'] = user.id
-        return jsonify({'message': 'Login successful', 'role': user.role})
-    return jsonify({'message': 'Invalid credentials'}), 401
+        session["user_id"] = user.id
+        return jsonify({"message": "Login successful", "role": user.role})
+    return jsonify({"message": "Invalid credentials"}), 401
 
-@app.route('/api/logout', methods=['POST'])
+@app.route("/api/logout", methods=["POST"])
 def logout():
-    session.pop('user_id', None)
-    return jsonify({'message': 'Logged out'})
+    session.pop("user_id", None)
+    return jsonify({"message": "Logged out"})
 
-@app.route('/api/session', methods=['GET'])
+@app.route("/api/session", methods=["GET"])
 def check_session():
-    if 'user_id' in session:
-        user = db.session.get(User, session['user_id'])
+    if "user_id" in session:
+        user = db.session.get(User, session["user_id"])
         if user is None:
-            return jsonify({'logged_in': False}), 401
-        return jsonify({'logged_in': True, 'user': user.serialize()})
-    return jsonify({'logged_in': False}), 401
+            return jsonify({"logged_in": False}), 401
+        return jsonify({"logged_in": True, "user": user.serialize()})
+    return jsonify({"logged_in": False}), 401
 
-@app.route('/api/assign', methods=['POST'])
-@login_required(role='admin')
+@app.route("/api/assign", methods=["POST"])
+@login_required(role="admin")
 def assign_stream():
     data = request.get_json()
-    agent_id = data.get('agent_id')
-    stream_id = data.get('stream_id')
+    agent_id = data.get("agent_id")
+    stream_id = data.get("stream_id")
     if not agent_id or not stream_id:
-        return jsonify({'message': 'Agent and Stream required'}), 400
-
+        return jsonify({"message": "Agent and Stream required"}), 400
     stream = Stream.query.get(stream_id)
     if not stream:
-        return jsonify({'message': 'Stream not found'}), 404
-
+        return jsonify({"message": "Stream not found"}), 404
     existing = Assignment.query.filter_by(stream_id=stream.id).first()
     if existing:
         db.session.delete(existing)
-
     db.session.add(Assignment(agent_id=agent_id, stream_id=stream.id))
     db.session.commit()
-    return jsonify({'message': 'Assignment successful'})
+    return jsonify({"message": "Assignment successful"})
 
-@app.route('/api/logs', methods=['GET'])
+@app.route("/api/logs", methods=["GET"])
 @login_required()
 def get_logs():
     return jsonify([log.serialize() for log in Log.query.all()])
 
-@app.route('/api/agents', methods=['GET'])
-@login_required(role='admin')
+@app.route("/api/agents", methods=["GET"])
+@login_required(role="admin")
 def get_agents():
-    return jsonify([agent.serialize() for agent in User.query.filter_by(role='agent').all()])
+    return jsonify([agent.serialize() for agent in User.query.filter_by(role="agent").all()])
 
-@app.route('/api/agents', methods=['POST'])
-@login_required(role='admin')
+@app.route("/api/agents", methods=["POST"])
+@login_required(role="admin")
 def create_agent():
     data = request.get_json()
-    required_fields = ['username', 'password', 'firstname', 'lastname', 'email', 'phonenumber']
+    required_fields = ["username", "password", "firstname", "lastname", "email", "phonenumber"]
     if any(field not in data for field in required_fields):
-        return jsonify({'message': 'Missing required fields'}), 400
-    if User.query.filter((User.username == data['username']) | (User.email == data['email'])).first():
-        return jsonify({'message': 'Username or email exists'}), 400
+        return jsonify({"message": "Missing required fields"}), 400
+    if User.query.filter((User.username == data["username"]) | (User.email == data["email"])).first():
+        return jsonify({"message": "Username or email exists"}), 400
     agent = User(
-        username=data['username'],
-        password=data['password'],
-        firstname=data['firstname'],
-        lastname=data['lastname'],
-        email=data['email'],
-        phonenumber=data['phonenumber'],
-        staffid=data.get('staffid'),
-        role='agent'
+        username=data["username"],
+        password=data["password"],
+        firstname=data["firstname"],
+        lastname=data["lastname"],
+        email=data["email"],
+        phonenumber=data["phonenumber"],
+        staffid=data.get("staffid"),
+        role="agent",
     )
     db.session.add(agent)
     db.session.commit()
-    return jsonify({'message': 'Agent created', 'agent': agent.serialize()}), 201
+    return jsonify({"message": "Agent created", "agent": agent.serialize()}), 201
 
-@app.route('/api/agents/<int:agent_id>', methods=['PUT'])
-@login_required(role='admin')
+@app.route("/api/agents/<int:agent_id>", methods=["PUT"])
+@login_required(role="admin")
 def update_agent(agent_id):
-    agent = User.query.filter_by(id=agent_id, role='agent').first()
+    agent = User.query.filter_by(id=agent_id, role="agent").first()
     if not agent:
-        return jsonify({'message': 'Agent not found'}), 404
+        return jsonify({"message": "Agent not found"}), 404
     data = request.get_json()
     updates = {}
-    if 'username' in data and (new_uname := data['username'].strip()):
+    if "username" in data and (new_uname := data["username"].strip()):
         agent.username = new_uname
-        updates['username'] = new_uname
-    if 'password' in data and (new_pwd := data['password'].strip()):
+        updates["username"] = new_uname
+    if "password" in data and (new_pwd := data["password"].strip()):
         agent.password = new_pwd
-        updates['password'] = 'updated'
+        updates["password"] = "updated"
     db.session.commit()
-    return jsonify({'message': 'Agent updated', 'updates': updates})
+    return jsonify({"message": "Agent updated", "updates": updates})
 
-@app.route('/api/agents/<int:agent_id>', methods=['DELETE'])
-@login_required(role='admin')
+@app.route("/api/agents/<int:agent_id>", methods=["DELETE"])
+@login_required(role="admin")
 def delete_agent(agent_id):
-    agent = User.query.filter_by(id=agent_id, role='agent').first()
+    agent = User.query.filter_by(id=agent_id, role="agent").first()
     if not agent:
-        return jsonify({'message': 'Agent not found'}), 404
+        return jsonify({"message": "Agent not found"}), 404
     db.session.delete(agent)
     db.session.commit()
-    return jsonify({'message': 'Agent deleted'})
+    return jsonify({"message": "Agent deleted"})
 
-@app.route('/api/streams', methods=['GET'])
-@login_required(role='admin')
+@app.route("/api/streams", methods=["GET"])
+@login_required(role="admin")
 def get_streams():
     return jsonify([stream.serialize() for stream in Stream.query.all()])
 
-@app.route('/api/streams', methods=['POST'])
-@login_required(role='admin')
+@app.route("/api/streams", methods=["POST"])
+@login_required(role="admin")
 def create_stream():
     data = request.get_json()
-    room_url = data.get('room_url', '').strip().lower()
+    room_url = data.get("room_url", "").strip().lower()
     if not room_url:
-        return jsonify({'message': 'Room URL required'}), 400
-    platform = data.get('platform', 'Chaturbate').strip()
+        return jsonify({"message": "Room URL required"}), 400
+    platform = data.get("platform", "Chaturbate").strip()
     if platform.lower() == "chaturbate" and "chaturbate.com/" not in room_url:
-        return jsonify({'message': 'Invalid Chaturbate URL'}), 400
+        return jsonify({"message": "Invalid Chaturbate URL"}), 400
     if platform.lower() == "stripchat" and "stripchat.com/" not in room_url:
-        return jsonify({'message': 'Invalid Stripchat URL'}), 400
-    streamer = room_url.rstrip('/').split('/')[-1]
+        return jsonify({"message": "Invalid Stripchat URL"}), 400
+    streamer = room_url.rstrip("/").split("/")[-1]
     if Stream.query.filter_by(room_url=room_url).first():
-        return jsonify({'message': 'Stream exists'}), 400
+        return jsonify({"message": "Stream exists"}), 400
     stream = Stream(
         room_url=room_url,
         platform=platform,
-        streamer_username=streamer
+        streamer_username=streamer,
     )
+    # For Stripchat, scrape details including UID and construct the HLS URL.
+    if platform.lower() == "stripchat":
+        scraped_data = scrape_stripchat_data(room_url)
+        if scraped_data:
+            stream.streamer_uid = scraped_data["streamer_uid"]
+            stream.edge_server_url = scraped_data["edge_server_url"]
+            stream.blob_url = scraped_data.get("blob_url")  # This will be None.
+            stream.static_thumbnail = scraped_data.get("static_thumbnail")
+            logging.info("Scraped data for stream %s: %s", room_url, scraped_data)
+        else:
+            return jsonify({"message": "Failed to scrape Stripchat details for the provided URL"}), 500
     db.session.add(stream)
     db.session.commit()
     return jsonify({
-        'message': 'Stream created',
-        'stream': stream.serialize(),
-        'thumbnail': f'https://jpeg.live.mmcdn.com/stream?room={streamer}&f=0.8399472484345041'
+        "message": "Stream created",
+        "stream": stream.serialize(),
+        "thumbnail": f"https://jpeg.live.mmcdn.com/stream?room={streamer}&f=0.8399472484345041"
     }), 201
 
-@app.route('/api/streams/<int:stream_id>', methods=['PUT'])
-@login_required(role='admin')
+@app.route("/api/streams/<int:stream_id>", methods=["PUT"])
+@login_required(role="admin")
 def update_stream(stream_id):
     stream = Stream.query.get(stream_id)
     if not stream:
-        return jsonify({'message': 'Stream not found'}), 404
+        return jsonify({"message": "Stream not found"}), 404
     data = request.get_json()
-    if 'room_url' in data and (new_url := data['room_url'].strip()):
-        platform = data.get('platform', stream.platform).strip()
-        if platform.lower() == 'chaturbate' and 'chaturbate.com/' not in new_url:
-            return jsonify({'message': 'Invalid Chaturbate URL'}), 400
-        if platform.lower() == 'stripchat' and 'stripchat.com/' not in new_url:
-            return jsonify({'message': 'Invalid Stripchat URL'}), 400
+    if "room_url" in data and (new_url := data["room_url"].strip()):
+        platform = data.get("platform", stream.platform).strip()
+        if platform.lower() == "chaturbate" and "chaturbate.com/" not in new_url:
+            return jsonify({"message": "Invalid Chaturbate URL"}), 400
+        if platform.lower() == "stripchat" and "stripchat.com/" not in new_url:
+            return jsonify({"message": "Invalid Stripchat URL"}), 400
         stream.room_url = new_url
-        stream.streamer_username = new_url.rstrip('/').split('/')[-1]
-    if 'platform' in data:
-        stream.platform = data['platform'].strip()
+        stream.streamer_username = new_url.rstrip("/").split("/")[-1]
+        if stream.platform.lower() == "stripchat":
+            scraped_data = scrape_stripchat_data(new_url)
+            if scraped_data:
+                stream.streamer_uid = scraped_data["streamer_uid"]
+                stream.edge_server_url = scraped_data["edge_server_url"]
+                stream.blob_url = scraped_data.get("blob_url")
+                stream.static_thumbnail = scraped_data.get("static_thumbnail")
+            else:
+                return jsonify({"message": "Failed to scrape Stripchat details for updated URL"}), 500
+    if "platform" in data:
+        stream.platform = data["platform"].strip()
     db.session.commit()
-    return jsonify({'message': 'Stream updated', 'stream': stream.serialize()})
+    return jsonify({"message": "Stream updated", "stream": stream.serialize()})
 
-@app.route('/api/streams/<int:stream_id>', methods=['DELETE'])
-@login_required(role='admin')
+@app.route("/api/streams/<int:stream_id>", methods=["DELETE"])
+@login_required(role="admin")
 def delete_stream(stream_id):
     stream = Stream.query.get(stream_id)
     if not stream:
-        return jsonify({'message': 'Stream not found'}), 404
+        return jsonify({"message": "Stream not found"}), 404
     assignments = Assignment.query.filter_by(stream_id=stream.id).all()
     for assignment in assignments:
         db.session.delete(assignment)
     db.session.delete(stream)
     db.session.commit()
-    return jsonify({'message': 'Stream deleted'})
+    return jsonify({"message": "Stream deleted"})
 
-@app.route('/api/keywords', methods=['GET'])
-@login_required(role='admin')
+# New endpoint to start an asynchronous Stripchat scraping job with progress reporting.
+@app.route("/api/scrape/stripchat", methods=["POST"])
+@login_required(role="admin")
+def scrape_stripchat_endpoint():
+    data = request.get_json()
+    url = data.get("room_url", "").strip().lower()
+    if not url:
+        return jsonify({"message": "Room URL required"}), 400
+    if "stripchat.com/" not in url:
+        return jsonify({"message": "Invalid Stripchat URL"}), 400
+    job_id = str(uuid.uuid4())
+    scrape_jobs[job_id] = {"progress": 0, "message": "Job created"}
+    threading.Thread(target=run_scrape_job, args=(job_id, url), daemon=True).start()
+    return jsonify({"message": "Scrape job started", "job_id": job_id})
+
+@app.route("/api/scrape/progress/<job_id>", methods=["GET"])
+@login_required(role="admin")
+def get_scrape_progress(job_id):
+    job = scrape_jobs.get(job_id)
+    if not job:
+        return jsonify({"message": "Job ID not found"}), 404
+    return jsonify(job)
+
+@app.route("/api/keywords", methods=["GET"])
+@login_required(role="admin")
 def get_keywords():
     return jsonify([kw.serialize() for kw in ChatKeyword.query.all()])
 
-@app.route('/api/keywords', methods=['POST'])
-@login_required(role='admin')
+@app.route("/api/keywords", methods=["POST"])
+@login_required(role="admin")
 def create_keyword():
     data = request.get_json()
-    keyword = data.get('keyword', '').strip()
+    keyword = data.get("keyword", "").strip()
     if not keyword:
-        return jsonify({'message': 'Keyword required'}), 400
+        return jsonify({"message": "Keyword required"}), 400
     if ChatKeyword.query.filter_by(keyword=keyword).first():
-        return jsonify({'message': 'Keyword exists'}), 400
+        return jsonify({"message": "Keyword exists"}), 400
     kw = ChatKeyword(keyword=keyword)
     db.session.add(kw)
     db.session.commit()
     update_flagged_keywords()
-    return jsonify({'message': 'Keyword added', 'keyword': kw.serialize()}), 201
+    return jsonify({"message": "Keyword added", "keyword": kw.serialize()}), 201
 
-@app.route('/api/keywords/<int:keyword_id>', methods=['PUT'])
-@login_required(role='admin')
+@app.route("/api/keywords/<int:keyword_id>", methods=["PUT"])
+@login_required(role="admin")
 def update_keyword(keyword_id):
     kw = ChatKeyword.query.get(keyword_id)
     if not kw:
-        return jsonify({'message': 'Keyword not found'}), 404
+        return jsonify({"message": "Keyword not found"}), 404
     data = request.get_json()
-    new_kw = data.get('keyword', '').strip()
+    new_kw = data.get("keyword", "").strip()
     if not new_kw:
-        return jsonify({'message': 'New keyword required'}), 400
+        return jsonify({"message": "New keyword required"}), 400
     kw.keyword = new_kw
     db.session.commit()
     update_flagged_keywords()
-    return jsonify({'message': 'Keyword updated', 'keyword': kw.serialize()})
+    return jsonify({"message": "Keyword updated", "keyword": kw.serialize()})
 
-@app.route('/api/keywords/<int:keyword_id>', methods=['DELETE'])
-@login_required(role='admin')
+@app.route("/api/keywords/<int:keyword_id>", methods=["DELETE"])
+@login_required(role="admin")
 def delete_keyword(keyword_id):
     kw = ChatKeyword.query.get(keyword_id)
     if not kw:
-        return jsonify({'message': 'Keyword not found'}), 404
+        return jsonify({"message": "Keyword not found"}), 404
     db.session.delete(kw)
     db.session.commit()
     update_flagged_keywords()
-    return jsonify({'message': 'Keyword deleted'})
+    return jsonify({"message": "Keyword deleted"})
 
-@app.route('/api/objects', methods=['GET'])
-@login_required(role='admin')
+@app.route("/api/objects", methods=["GET"])
+@login_required(role="admin")
 def get_objects():
     return jsonify([obj.serialize() for obj in FlaggedObject.query.all()])
 
-@app.route('/api/objects', methods=['POST'])
-@login_required(role='admin')
+@app.route("/api/objects", methods=["POST"])
+@login_required(role="admin")
 def create_object():
     data = request.get_json()
-    obj_name = data.get('object_name', '').strip()
+    obj_name = data.get("object_name", "").strip()
     if not obj_name:
-        return jsonify({'message': 'Object name required'}), 400
+        return jsonify({"message": "Object name required"}), 400
     if FlaggedObject.query.filter_by(object_name=obj_name).first():
-        return jsonify({'message': 'Object exists'}), 400
+        return jsonify({"message": "Object exists"}), 400
     obj = FlaggedObject(object_name=obj_name)
     db.session.add(obj)
     db.session.commit()
-    return jsonify({'message': 'Object added', 'object': obj.serialize()}), 201
+    return jsonify({"message": "Object added", "object": obj.serialize()}), 201
 
-@app.route('/api/objects/<int:object_id>', methods=['PUT'])
-@login_required(role='admin')
+@app.route("/api/objects/<int:object_id>", methods=["PUT"])
+@login_required(role="admin")
 def update_object(object_id):
     obj = FlaggedObject.query.get(object_id)
     if not obj:
-        return jsonify({'message': 'Object not found'}), 404
+        return jsonify({"message": "Object not found"}), 404
     data = request.get_json()
-    new_name = data.get('object_name', '').strip()
+    new_name = data.get("object_name", "").strip()
     if not new_name:
-        return jsonify({'message': 'New name required'}), 400
+        return jsonify({"message": "New name required"}), 400
     obj.object_name = new_name
     db.session.commit()
-    return jsonify({'message': 'Object updated', 'object': obj.serialize()})
+    return jsonify({"message": "Object updated", "object": obj.serialize()})
 
-@app.route('/api/objects/<int:object_id>', methods=['DELETE'])
-@login_required(role='admin')
+@app.route("/api/objects/<int:object_id>", methods=["DELETE"])
+@login_required(role="admin")
 def delete_object(object_id):
     obj = FlaggedObject.query.get(object_id)
     if not obj:
-        return jsonify({'message': 'Object not found'}), 404
+        return jsonify({"message": "Object not found"}), 404
     db.session.delete(obj)
     db.session.commit()
-    return jsonify({'message': 'Object deleted'})
+    return jsonify({"message": "Object deleted"})
 
-@app.route('/api/telegram_recipients', methods=['GET'])
-@login_required(role='admin')
+@app.route("/api/telegram_recipients", methods=["GET"])
+@login_required(role="admin")
 def get_telegram_recipients():
     recipients = TelegramRecipient.query.all()
     return jsonify([r.serialize() for r in recipients])
 
-@app.route('/api/telegram_recipients', methods=['POST'])
-@login_required(role='admin')
+@app.route("/api/telegram_recipients", methods=["POST"])
+@login_required(role="admin")
 def create_telegram_recipient():
     data = request.get_json()
-    username = data.get('telegram_username')
-    chat_id = data.get('chat_id')
+    username = data.get("telegram_username")
+    chat_id = data.get("chat_id")
     if not username or not chat_id:
-        return jsonify({'message': 'Telegram username and chat_id required'}), 400
+        return jsonify({"message": "Telegram username and chat_id required"}), 400
     if TelegramRecipient.query.filter_by(telegram_username=username).first():
-        return jsonify({'message': 'Recipient exists'}), 400
+        return jsonify({"message": "Recipient exists"}), 400
     recipient = TelegramRecipient(telegram_username=username, chat_id=chat_id)
     db.session.add(recipient)
     db.session.commit()
-    return jsonify({'message': 'Recipient added', 'recipient': recipient.serialize()}), 201
+    return jsonify({"message": "Recipient added", "recipient": recipient.serialize()}), 201
 
-@app.route('/api/telegram_recipients/<int:recipient_id>', methods=['DELETE'])
-@login_required(role='admin')
+@app.route("/api/telegram_recipients/<int:recipient_id>", methods=["DELETE"])
+@login_required(role="admin")
 def delete_telegram_recipient(recipient_id):
     recipient = TelegramRecipient.query.get(recipient_id)
     if not recipient:
-        return jsonify({'message': 'Recipient not found'}), 404
+        return jsonify({"message": "Recipient not found"}), 404
     db.session.delete(recipient)
     db.session.commit()
-    return jsonify({'message': 'Recipient deleted'})
+    return jsonify({"message": "Recipient deleted"})
 
-@app.route('/api/dashboard', methods=['GET'])
-@login_required(role='admin')
+@app.route("/api/dashboard", methods=["GET"])
+@login_required(role="admin")
 def get_dashboard():
     streams = Stream.query.all()
     data = []
@@ -933,26 +1102,26 @@ def get_dashboard():
         })
     return jsonify({"ongoing_streams": len(data), "streams": data})
 
-@app.route('/api/agent/dashboard', methods=['GET'])
-@login_required(role='agent')
+@app.route("/api/agent/dashboard", methods=["GET"])
+@login_required(role="agent")
 def get_agent_dashboard():
-    agent_id = session['user_id']
+    agent_id = session["user_id"]
     assignments = Assignment.query.filter_by(agent_id=agent_id).all()
     return jsonify({
         "ongoing_streams": len(assignments),
         "assignments": [a.stream.serialize() for a in assignments if a.stream]
     })
 
-@app.route('/api/test/visual', methods=['POST'])
-@login_required(role='admin')
+@app.route("/api/test/visual", methods=["POST"])
+@login_required(role="admin")
 def test_visual():
-    if 'video' not in request.files:
-        return jsonify({'message': 'No file uploaded'}), 400
-    file = request.files['video']
+    if "video" not in request.files:
+        return jsonify({"message": "No file uploaded"}), 400
+    file = request.files["video"]
     if not allowed_file(file.filename):
-        return jsonify({'message': 'Invalid file type'}), 400
+        return jsonify({"message": "Invalid file type"}), 400
     filename = secure_filename(file.filename)
-    filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+    filepath = os.path.join(app.config["UPLOAD_FOLDER"], filename)
     os.makedirs(os.path.dirname(filepath), exist_ok=True)
     file.save(filepath)
     cap = cv2.VideoCapture(filepath)
@@ -960,26 +1129,26 @@ def test_visual():
     cap.release()
     os.remove(filepath)
     if not ret:
-        return jsonify({'message': 'Error reading video'}), 400
+        return jsonify({"message": "Error reading video"}), 400
     results = detect_frame(frame)
-    return jsonify({'results': results})
+    return jsonify({"results": results})
 
-@app.route('/api/test/visual/frame', methods=['POST'])
-@login_required(role='admin')
+@app.route("/api/test/visual/frame", methods=["POST"])
+@login_required(role="admin")
 def test_visual_frame():
-    if 'frame' not in request.files:
-        return jsonify({'message': 'No frame uploaded'}), 400
-    file = request.files['frame']
+    if "frame" not in request.files:
+        return jsonify({"message": "No frame uploaded"}), 400
+    file = request.files["frame"]
     try:
-        img = Image.open(file.stream).convert('RGB')
+        img = Image.open(file.stream).convert("RGB")
         frame = np.array(img)
         results = detect_frame(frame)
-        return jsonify({'results': results})
+        return jsonify({"results": results})
     except Exception as e:
-        return jsonify({'message': 'Processing error: ' + str(e)}), 500
+        return jsonify({"message": "Processing error: " + str(e)}), 500
 
-@app.route('/api/test/visual/stream', methods=['GET'])
-@login_required(role='admin')
+@app.route("/api/test/visual/stream", methods=["GET"])
+@login_required(role="admin")
 def stream_visual():
     def generate():
         cap = cv2.VideoCapture(0)
@@ -996,12 +1165,12 @@ def stream_visual():
                 try:
                     results = detect_frame(frame)
                     for det in results:
-                        if 'class' in det:
-                            detected_objects_set.add(det['class'])
+                        if "class" in det:
+                            detected_objects_set.add(det["class"])
                     payload = {
-                        'results': results,
-                        'detected_objects': list(detected_objects_set),
-                        'model': 'yolov10m'
+                        "results": results,
+                        "detected_objects": list(detected_objects_set),
+                        "model": "yolov10m"
                     }
                     yield "data: " + json.dumps(payload) + "\n\n"
                 except Exception as e:
@@ -1009,13 +1178,13 @@ def stream_visual():
                 time.sleep(0.5)
         finally:
             cap.release()
-    return app.response_class(generate(), mimetype='text/event-stream')
+    return app.response_class(generate(), mimetype="text/event-stream")
 
-@app.route('/detection-images/<filename>')
+@app.route("/detection-images/<filename>")
 def serve_detection_image(filename):
-    return send_from_directory('detections', filename)
+    return send_from_directory("detections", filename)
 
-@app.route('/api/detection-events', methods=['GET'])
+@app.route("/api/detection-events", methods=["GET"])
 def detection_events():
     def generate():
         with app.app_context():
@@ -1024,76 +1193,76 @@ def detection_events():
                     cutoff = datetime.utcnow() - timedelta(seconds=15)
                     logs = Log.query.filter(
                         Log.timestamp >= cutoff,
-                        Log.event_type == 'object_detection'
+                        Log.event_type == "object_detection"
                     ).all()
                     stream_detections = defaultdict(list)
                     for log in logs:
-                        stream_detections[log.room_url].extend(log.details.get('detections', []))
+                        stream_detections[log.room_url].extend(log.details.get("detections", []))
                     for url, detections in stream_detections.items():
                         payload = json.dumps({
-                            'stream_url': url,
-                            'detections': detections
+                            "stream_url": url,
+                            "detections": detections
                         })
                         yield f"data: {payload}\n\n"
                     time.sleep(2)
                 except Exception as e:
                     logging.error("SSE Error: %s", e)
                     time.sleep(5)
-    return app.response_class(generate(), mimetype='text/event-stream')
+    return app.response_class(generate(), mimetype="text/event-stream")
 
-@app.route('/api/detect', methods=['POST'])
+@app.route("/api/detect", methods=["POST"])
 def unified_detect():
     data = request.get_json()
-    text = data.get('text', '')
-    visual_frame = data.get('visual_frame', None)
+    text = data.get("text", "")
+    visual_frame = data.get("visual_frame", None)
     audio_flag = None
     visual_results = []
     if visual_frame:
         visual_results = detect_frame(np.array(visual_frame))
     chat_results = detect_chat(text)
     return jsonify({
-        'audio': audio_flag,
-        'chat': chat_results,
-        'visual': visual_results
+        "audio": audio_flag,
+        "chat": chat_results,
+        "visual": visual_results
     })
 
-@app.route('/api/detect-objects', methods=['POST'])
+@app.route("/api/detect-objects", methods=["POST"])
 @login_required()
 def detect_objects():
     try:
         data = request.get_json()
-        if 'image_data' not in data:
-            return jsonify({'error': 'Missing image data'}), 400
+        if "image_data" not in data:
+            return jsonify({"error": "Missing image data"}), 400
         try:
-            img_bytes = base64.b64decode(data['image_data'])
-            img = Image.open(BytesIO(img_bytes)).convert('RGB')
+            img_bytes = base64.b64decode(data["image_data"])
+            img = Image.open(BytesIO(img_bytes)).convert("RGB")
             frame = np.array(img)
         except Exception as e:
-            return jsonify({'error': 'Invalid image data'}), 400
+            return jsonify({"error": "Invalid image data"}), 400
         update_flagged_objects()
         results = detect_frame(frame)
         height, width = frame.shape[:2]
         detections = []
         for det in results:
             try:
-                x1 = (det['box'][0] / width) * 100
-                y1 = (det['box'][1] / height) * 100
-                x2 = (det['box'][2] / width) * 100
-                y2 = (det['box'][3] / height) * 100
+                x1 = (det["box"][0] / width) * 100
+                y1 = (det["box"][1] / height) * 100
+                x2 = (det["box"][2] / width) * 100
+                y2 = (det["box"][3] / height) * 100
                 detections.append({
-                    'class': det['class'],
-                    'confidence': det['confidence'],
-                    'box': [x1, y1, x2, y2],
-                    'source': 'ai'
+                    "class": det["class"],
+                    "confidence": det["confidence"],
+                    "box": [x1, y1, x2, y2],
+                    "source": "ai"
                 })
             except KeyError:
                 continue
-        return jsonify({'detections': detections})
+        return jsonify({"detections": detections})
     except Exception as e:
         logging.error("Detection error: %s", e)
-        return jsonify({'error': 'Processing failed'}), 500
+        return jsonify({"error": "Processing failed"}), 500
 
-@app.route('/api/notification-events')
+@app.route("/api/notification-events")
 def notification_events():
     def generate():
         with app.app_context():
@@ -1102,35 +1271,60 @@ def notification_events():
                     cutoff = datetime.utcnow() - timedelta(seconds=30)
                     logs = Log.query.filter(
                         Log.timestamp >= cutoff,
-                        Log.event_type == 'object_detection'
+                        Log.event_type == "object_detection"
                     ).order_by(Log.timestamp.desc()).all()
                     for log in logs:
-                        for det in log.details.get('detections', []):
+                        for det in log.details.get("detections", []):
                             payload = {
-                                'type': 'detection',
-                                'stream': log.room_url,
-                                'object': det.get('class', 'object'),
-                                'confidence': det.get('confidence', 0),
-                                'id': log.id
+                                "type": "detection",
+                                "stream": log.room_url,
+                                "object": det.get("class", "object"),
+                                "confidence": det.get("confidence", 0),
+                                "id": log.id,
                             }
                             yield "data: " + json.dumps(payload) + "\n\n"
                     time.sleep(1)
                 except Exception as e:
                     logging.error("SSE Error: %s", e)
                     time.sleep(5)
-    return app.response_class(generate(), mimetype='text/event-stream')
+    return app.response_class(generate(), mimetype="text/event-stream")
 
-@app.route('/health')
+@app.route("/health")
 def health():
     return "OK", 200
+
+@app.route("/api/livestream", methods=["POST"])
+def get_livestream():
+    """
+    Parses an M3U8 playlist and returns the appropriate stream URL.
+    """
+    data = request.get_json()
+    if not data or "url" not in data:
+        return jsonify({"error": "Missing M3U8 URL"}), 400
+
+    m3u8_url = edge_server_url
+    try:
+        response = requests.get(m3u8_url, timeout=10)
+        if response.status_code != 200:
+            return jsonify({"error": "Failed to fetch M3U8 file"}), 500
+
+        playlist = m3u8.loads(response.text)
+        if not playlist.playlists:
+            return jsonify({"error": "No valid streams found"}), 400
+
+        stream_url = playlist.playlists[0].uri  # Selecting the best available stream
+        return jsonify({"stream_url": stream_url})
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 # =============================================================================
 # Main Execution
 # =============================================================================
-if __name__ == '__main__':
+if __name__ == "__main__":
     with app.app_context():
         start_monitoring()
         start_notification_monitor()
         start_chat_cleanup_thread()
         start_detection_cleanup_thread()
-    app.run(host='0.0.0.0', port=5000, threaded=True, debug=False)
+    app.run(host="0.0.0.0", port=5000, threaded=True, debug=False)
