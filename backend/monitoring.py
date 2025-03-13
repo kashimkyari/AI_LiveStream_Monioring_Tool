@@ -1,4 +1,3 @@
-# monitoring.py
 import time
 import threading
 import uuid
@@ -22,53 +21,16 @@ from detection import detect_frame, update_flagged_objects
 monitoring_executor = concurrent.futures.ThreadPoolExecutor(max_workers=20)
 
 def monitor_stream(stream_url):
-    max_retries = 5
-    cooldown = 60
-    max_sleep = 300
-    retries = 0
-    session_requests = requests.Session()
+    """
+    With backend object detection disabled, this monitor simply logs that detection is off and sleeps.
+    """
     while True:
         with app.app_context():
             stream = Stream.query.filter_by(room_url=stream_url).first()
             if not stream:
                 logging.info("Stream %s not found. Exiting monitor.", stream_url)
                 return
-
-            streamer = stream_url.rstrip("/").split("/")[-1]
-            try:
-                thumbnail_url = f"https://jpeg.live.mmcdn.com/stream?room={streamer}"
-                response = session_requests.get(thumbnail_url, stream=True, timeout=10)
-                if response.status_code != 200:
-                    raise Exception("Thumbnail fetch failed")
-                img = Image.open(BytesIO(response.content)).convert("RGB")
-                detection_id = str(uuid.uuid4())
-                image_path = f"detections/{detection_id}.jpg"
-                os.makedirs("detections", exist_ok=True)
-                img.save(image_path)
-                update_flagged_objects()
-                frame = np.array(img)
-                detections = detect_frame(frame)
-                if detections:
-                    detection_data = {
-                        "detections": detections,
-                        "image_url": f"/detection-images/{detection_id}.jpg",
-                        "stream_id": stream.id,
-                        "timestamp": datetime.utcnow().isoformat(),
-                    }
-                    log_entry = Log(
-                        room_url=stream_url,
-                        event_type="object_detection",
-                        details=detection_data,
-                    )
-                    db.session.add(log_entry)
-                    db.session.commit()
-                retries = 0
-            except Exception as e:
-                logging.error("Monitoring error for %s: %s", stream_url, e)
-                retries += 1
-                sleep_time = min(cooldown * (2 ** retries), max_sleep)
-                logging.info("Retrying %s in %s seconds...", stream_url, sleep_time)
-                time.sleep(sleep_time)
+            logging.info("Backend object detection is disabled for stream: %s", stream_url)
         time.sleep(10)
 
 def start_monitoring():

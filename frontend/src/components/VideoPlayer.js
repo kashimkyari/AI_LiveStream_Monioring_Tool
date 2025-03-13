@@ -13,6 +13,8 @@ const HlsPlayer = ({ streamerUid, onDetection }) => {
 
   // State to hold allowed objects fetched from the backend API
   const [allowedObjects, setAllowedObjects] = useState([]);
+  // New state: holds flagged objects from admin panel settings
+  const [flaggedObjects, setFlaggedObjects] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [hasError, setHasError] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
@@ -52,10 +54,32 @@ const HlsPlayer = ({ streamerUid, onDetection }) => {
     fetchAllowedObjects();
   }, []);
 
+  // Fetch flagged objects from the backend API (flag settings from admin panel)
+  useEffect(() => {
+    const fetchFlaggedObjects = async () => {
+      try {
+        const response = await fetch('/api/flagged-objects');
+        if (!response.ok) {
+          throw new Error(`HTTP error! Status: ${response.status}`);
+        }
+        const data = await response.json();
+        // Assuming data is an array of strings or objects with an object_name field.
+        const flagged = data.map(item =>
+          typeof item === 'string' ? item.toLowerCase() : item.object_name.toLowerCase()
+        );
+        setFlaggedObjects(flagged);
+      } catch (error) {
+        console.error("Error fetching flagged objects:", error);
+        setFlaggedObjects([]);
+      }
+    };
+    fetchFlaggedObjects();
+  }, []);
+
   // Function to send detection event to backend for Telegram notifications.
+  // This endpoint is assumed to trigger the send_full_telegram_notification_sync in the backend.
   const notifyDetection = async (detections) => {
     try {
-      // Immediately send the detection event to your backend.
       await fetch('/api/log-detection', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -113,15 +137,11 @@ const HlsPlayer = ({ streamerUid, onDetection }) => {
 
         // Draw annotations for filtered predictions.
         filteredPredictions.forEach(prediction => {
-          // Get the original bounding box values: [x, y, width, height] in video pixels.
           const [x, y, width, height] = prediction.bbox;
-          // Scaling factors for canvas drawing.
           const scaleX = canvas.width / video.videoWidth;
           const scaleY = canvas.height / video.videoHeight;
-          // Prepare the label text.
           const label = `${prediction.class} (${(prediction.score * 100).toFixed(1)}%)`;
 
-          // If the object is tall (height/width >= 1.5), draw a vertical rectangle that is narrower.
           if (height / width >= 1.5) {
             const newWidth = width * scaleX * 0.33; // roughly one-third of original width
             const centerX = (x + width / 2) * scaleX;
@@ -135,7 +155,6 @@ const HlsPlayer = ({ streamerUid, onDetection }) => {
             ctx.font = '14px Arial';
             ctx.fillText(label, newX, newY - 5);
           } else {
-            // For other objects, draw the standard bounding box.
             ctx.strokeStyle = 'red';
             ctx.lineWidth = 2;
             ctx.strokeRect(x * scaleX, y * scaleY, width * scaleX, height * scaleY);
@@ -145,11 +164,17 @@ const HlsPlayer = ({ streamerUid, onDetection }) => {
           }
         });
 
-        // Notify parent component of the filtered detections.
+        // Notify parent component with all allowed detections.
         if (onDetection) onDetection(filteredPredictions);
-        // Immediately send notification when any allowed object is detected.
-        if (filteredPredictions.length > 0) {
-          notifyDetection(filteredPredictions);
+
+        // Filter flagged predictions based on admin panel flag settings.
+        const flaggedPredictions = filteredPredictions.filter(prediction =>
+          flaggedObjects.includes(prediction.class.toLowerCase())
+        );
+
+        // Send Telegram notification only if flagged objects are detected.
+        if (flaggedPredictions.length > 0) {
+          notifyDetection(flaggedPredictions);
         }
       } catch (error) {
         console.error("Detection error:", error);
@@ -176,7 +201,7 @@ const HlsPlayer = ({ streamerUid, onDetection }) => {
       video.removeEventListener('ended', handlePause);
       clearInterval(detectionInterval);
     };
-  }, [onDetection, allowedObjects]);
+  }, [onDetection, allowedObjects, flaggedObjects]);
 
   // HLS player initialization logic
   useEffect(() => {

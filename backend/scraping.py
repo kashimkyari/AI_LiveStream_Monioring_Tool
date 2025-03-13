@@ -1,17 +1,15 @@
-# scraping.py
 import re
 import logging
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-from io import BytesIO
-import threading
 import uuid
 
 # Global dictionary to hold scraping job statuses.
 scrape_jobs = {}
 
 def update_job_progress(job_id, percent, message):
+    """Update the progress status of a scraping job."""
     scrape_jobs[job_id] = {
         "progress": percent,
         "message": message,
@@ -19,19 +17,27 @@ def update_job_progress(job_id, percent, message):
     logging.info("Job %s progress: %s%% - %s", job_id, percent, message)
 
 def scrape_stripchat_data(url, progress_callback=None):
+    """
+    Scrape streamer details from a Stripchat URL.
+    Returns a dictionary with streamer_uid, edge_server_url, blob_url, and static_thumbnail.
+    If any step fails, returns None.
+    """
     session = requests.Session()
     retries = Retry(total=3, backoff_factor=1, status_forcelist=[406, 429, 500, 502, 503, 504])
     adapter = HTTPAdapter(max_retries=retries)
     session.mount("https://", adapter)
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
+        ),
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     }
     try:
         if progress_callback:
             progress_callback(10, "Fetching Stripchat page")
         response = session.get(url, timeout=10, headers=headers)
-        html = response.text if response.text else ""
+        html = response.text or ""
         logging.info("Fetched page for URL: %s", url)
         if progress_callback:
             progress_callback(30, "Parsing HTML")
@@ -41,9 +47,7 @@ def scrape_stripchat_data(url, progress_callback=None):
             static_thumbnail = match_static.group(1)
             logging.info("Static thumbnail found: %s", static_thumbnail)
         else:
-            static_thumbnail = None
             logging.warning("No static thumbnail found for URL: %s", url)
-        if not static_thumbnail:
             if progress_callback:
                 progress_callback(100, "Error: Static thumbnail not found")
             return None
@@ -75,6 +79,9 @@ def scrape_stripchat_data(url, progress_callback=None):
         return None
 
 def run_scrape_job(job_id, url):
+    """
+    Run a scraping job for the given URL, update job progress, and store the result.
+    """
     update_job_progress(job_id, 0, "Starting scrape job")
     result = scrape_stripchat_data(url, progress_callback=lambda p, m: update_job_progress(job_id, p, m))
     if result:

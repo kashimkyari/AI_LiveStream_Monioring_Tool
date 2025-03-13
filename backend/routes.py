@@ -547,42 +547,15 @@ def unified_detect():
 @app.route("/api/detect-objects", methods=["POST"])
 @login_required()
 def detect_objects():
+    """
+    Since object detection is now handled on the frontend with TensorFlow,
+    this endpoint returns an empty detections list.
+    """
     try:
         data = request.get_json()
         if "image_data" not in data:
             return jsonify({"error": "Missing image data"}), 400
-
-        try:
-            # Decode the base64 image data
-            img_bytes = base64.b64decode(data["image_data"])
-            img = Image.open(BytesIO(img_bytes)).convert("RGB")
-            frame = np.array(img)
-        except Exception as e:
-            return jsonify({"error": "Invalid image data"}), 400
-
-        # Update flagged objects and perform detection
-        update_flagged_objects()
-        results = detect_frame(frame)
-
-        # Convert detection results to percentage-based coordinates
-        height, width = frame.shape[:2]
-        detections = []
-        for det in results:
-            try:
-                x1 = (det["box"][0] / width) * 100
-                y1 = (det["box"][1] / height) * 100
-                x2 = (det["box"][2] / width) * 100
-                y2 = (det["box"][3] / height) * 100
-                detections.append({
-                    "class": det["class"],
-                    "confidence": det["confidence"],
-                    "box": [x1, y1, x2, y2],
-                    "source": "ai"
-                })
-            except KeyError:
-                continue
-
-        return jsonify({"detections": detections})
+        return jsonify({"detections": []})
     except Exception as e:
         return jsonify({"error": "Processing failed"}), 500
 

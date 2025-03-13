@@ -1,4 +1,3 @@
-# main.py
 from config import app
 from extensions import db
 from models import User
@@ -9,6 +8,7 @@ import logging
 
 with app.app_context():
     db.create_all()
+    # Create default admin if none exists.
     if not User.query.filter_by(role="admin").first():
         admin = User(
             username="admin",
@@ -21,6 +21,7 @@ with app.app_context():
         )
         db.session.add(admin)
         db.session.commit()
+    # Create default agent if none exists.
     if not User.query.filter_by(role="agent").first():
         agent = User(
             username="agent",
@@ -34,6 +35,7 @@ with app.app_context():
         db.session.add(agent)
         db.session.commit()
 
+# Start background tasks.
 start_monitoring()
 start_notification_monitor()
 start_chat_cleanup_thread()

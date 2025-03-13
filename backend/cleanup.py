@@ -1,10 +1,12 @@
-# cleanup.py
 import os
 import time
 import logging
 from config import app
 
 def cleanup_chat_images():
+    """
+    Remove chat images older than 20 seconds from the chat images folder.
+    """
     chat_folder = app.config["CHAT_IMAGES_FOLDER"]
     now = time.time()
     for filename in os.listdir(chat_folder):
@@ -18,6 +20,7 @@ def cleanup_chat_images():
                     logging.error("Error deleting file %s: %s", filepath, e)
 
 def start_chat_cleanup_thread():
+    """Start a background thread to clean up chat images."""
     def cleanup_loop():
         while True:
             try:
@@ -29,6 +32,9 @@ def start_chat_cleanup_thread():
     threading.Thread(target=cleanup_loop, daemon=True).start()
 
 def cleanup_detection_images():
+    """
+    Remove detection images older than 30 minutes from the detections folder.
+    """
     detections_folder = "detections"
     now = time.time()
     threshold = 1800  # 30 minutes
@@ -45,6 +51,7 @@ def cleanup_detection_images():
                     logging.error("Error deleting detection image %s: %s", filepath, e)
 
 def start_detection_cleanup_thread():
+    """Start a background thread to clean up detection images."""
     def cleanup_loop():
         while True:
             try:

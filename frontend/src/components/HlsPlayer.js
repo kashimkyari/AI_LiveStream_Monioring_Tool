@@ -44,7 +44,7 @@ const HlsPlayer = ({ streamerUid, onDetection }) => {
         });
         
         hls.on(Hls.Events.ERROR, (event, data) => {
-          if (data.details === "manifestLoadError") {
+          if (data.details === "Maybe Offline") {
             setErrorMessage(`Stream cannot be loaded (${data.response ? data.response.code : 'unknown error'})`);
             setHasError(true);
             setIsLoading(false);

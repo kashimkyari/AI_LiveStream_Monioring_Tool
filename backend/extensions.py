@@ -1,5 +1,4 @@
-# extensions.py
 from flask_sqlalchemy import SQLAlchemy
 
-# Initialize the SQLAlchemy object without binding to an app yet.
+# Initialize the SQLAlchemy object.
 db = SQLAlchemy()

@@ -1,10 +1,9 @@
-# config.py
 import os
 import logging
 from datetime import timedelta
 from flask import Flask
 from flask_cors import CORS
-from extensions import db  # Import the db instance from extensions
+from extensions import db
 
 # -----------------------------------------------------------------------------
 # Logging Configuration

@@ -1,4 +1,3 @@
-# utils.py
 import os
 from functools import wraps
 from flask import session, jsonify
@@ -9,9 +8,14 @@ from extensions import db
 ALLOWED_EXTENSIONS = {"mp4", "avi", "mov"}
 
 def allowed_file(filename):
+    """Return True if the filename extension is allowed."""
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
 
 def login_required(role=None):
+    """
+    Decorator to require a logged-in user.
+    Optionally checks if the user has a specific role.
+    """
     def decorator(f):
         @wraps(f)
         def decorated_function(*args, **kwargs):
