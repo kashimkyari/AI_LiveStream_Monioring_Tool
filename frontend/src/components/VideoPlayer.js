@@ -1,423 +1,369 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
-import axios from 'axios';
+import React, { useState, useEffect, useRef } from 'react';
+import Hls from 'hls.js';
+import IframePlayer from './IframePlayer';
 
-/**
- * HlsPlayer Component
- * 
- * A simple React component that uses HLS.js to load an HLS stream.
- * Assumes HLS.js is loaded globally via a script tag in index.html.
- */
-const HlsPlayer = ({ src, ...props }) => {
+const HlsPlayer = ({ streamerUid }) => {
   const videoRef = useRef(null);
+  const actualStreamerUid = streamerUid !== "${streamerUid}" ? streamerUid : "";
+  const hlsUrl = actualStreamerUid ? `https://b-hls-11.doppiocdn.live/hls/${actualStreamerUid}/${actualStreamerUid}.m3u8` : "";
+  const [isLoading, setIsLoading] = useState(true);
+  const [hasError, setHasError] = useState(false);
+  const [errorMessage, setErrorMessage] = useState("");
 
   useEffect(() => {
     let hls;
-    const video = videoRef.current;
-
-    if (video) {
-      // If the browser supports HLS natively (e.g., Safari)
-      if (video.canPlayType('application/vnd.apple.mpegurl')) {
-        video.src = src;
-      } else if (window.Hls) {
-        // Otherwise, use HLS.js if available
-        hls = new window.Hls();
-        hls.loadSource(src);
-        hls.attachMedia(video);
-        hls.on(window.Hls.Events.ERROR, (event, data) => {
-          console.error('HLS.js error:', data);
+    
+    if (!hlsUrl) {
+      setIsLoading(false);
+      setHasError(true);
+      setErrorMessage("Invalid streamer UID");
+      return;
+    }
+    
+    const initializePlayer = () => {
+      if (Hls.isSupported()) {
+        hls = new Hls({
+          autoStartLoad: true,
+          startLevel: -1,
+          debug: false,
+          maxBufferLength: 30,
+        });
+        
+        hls.loadSource(hlsUrl);
+        hls.attachMedia(videoRef.current);
+        
+        hls.on(Hls.Events.MANIFEST_PARSED, () => {
+          setIsLoading(false);
+          setHasError(false);
+          videoRef.current.muted = true; // Ensure the video is muted for autoplay
+          videoRef.current.play().catch(error => {
+            console.error('Autoplay failed:', error);
+          });
+        });
+        
+        hls.on(Hls.Events.ERROR, (event, data) => {
+          if (data.details === "manifestLoadError") {
+            setErrorMessage(`Stream cannot be loaded (${data.response ? data.response.code : 'unknown error'})`);
+            setHasError(true);
+            setIsLoading(false);
+          }
+          
+          if (data.fatal) {
+            switch(data.type) {
+              case Hls.ErrorTypes.NETWORK_ERROR:
+                if (data.details !== "manifestLoadError") {
+                  hls.startLoad();
+                } else {
+                  setIsLoading(false);
+                  setHasError(true);
+                }
+                break;
+              case Hls.ErrorTypes.MEDIA_ERROR:
+                hls.recoverMediaError();
+                break;
+              default:
+                hls.destroy();
+                setIsLoading(false);
+                setHasError(true);
+                setErrorMessage("Fatal playback error occurred");
+                break;
+            }
+          }
+        });
+      } else if (videoRef.current.canPlayType('application/vnd.apple.mpegurl')) {
+        videoRef.current.src = hlsUrl;
+        videoRef.current.muted = true; // Ensure the video is muted for autoplay
+        
+        videoRef.current.addEventListener('loadedmetadata', () => {
+          setIsLoading(false);
+          videoRef.current.play().catch(error => {
+            console.error('Autoplay failed:', error);
+          });
+        });
+        
+        videoRef.current.addEventListener('error', (e) => {
+          setIsLoading(false);
+          setHasError(true);
+          setErrorMessage("Error loading stream in Safari");
         });
       } else {
-        console.error('HLS is not supported in this browser.');
+        setIsLoading(false);
+        setHasError(true);
+        setErrorMessage("HLS is not supported in this browser");
       }
-    }
+    };
+
+    initializePlayer();
+
     return () => {
       if (hls) {
         hls.destroy();
       }
     };
-  }, [src]);
+  }, [hlsUrl, streamerUid]);
 
   return (
-    <video
-      ref={videoRef}
-      controls
-      autoPlay
-      playsInline
-      style={{ width: '100%', height: '100%' }}
-      {...props}
-    />
+    <div className="hls-player-container">
+      {isLoading && (
+        <div className="loading-overlay">
+          <div className="loading-spinner"></div>
+          <div className="loading-text">Loading stream...</div>
+        </div>
+      )}
+      {hasError && (
+        <div className="error-overlay">
+          <div className="error-icon">⚠️</div>
+          <div className="error-text">{errorMessage || "Error loading stream"}</div>
+        </div>
+      )}
+      <video
+        ref={videoRef}
+        autoPlay // Ensure autoplay is enabled
+        muted // Ensure muted is enabled for autoplay
+        playsInline
+        style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+      />
+    </div>
   );
 };
 
-/**
- * VideoPlayer Component
- * 
- * Renders a live video stream using either a thumbnail or an embedded player.
- * Uses platform-specific players for different streaming platforms.
- */
-const VideoPlayer = ({ 
-  streamer_username, 
-  thumbnail = false, 
-  alerts = [], 
-  platform = 'chaturbate', // default platform set to 'chaturbate'
-  streamerUid // Expected for Stripchat HLS stream URL
+const VideoPlayer = ({
+  platform = "stripchat", 
+  streamerUid,
+  streamerName,
+  staticThumbnail,
 }) => {
-  const [thumbnailError, setThumbnailError] = useState(false);
-  const [visibleAlerts, setVisibleAlerts] = useState([]);
-  const [currentFrame, setCurrentFrame] = useState(null);
+  const [thumbnail, setThumbnail] = useState(null);
   const [isOnline, setIsOnline] = useState(true);
-  const [detections, setDetections] = useState([]);
-  const retryTimeout = useRef(null);
-  const detectionActive = useRef(false);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [loading, setLoading] = useState(true);
 
-  // Object detection logic for thumbnails
-  const detectObjects = useCallback(async (imageUrl) => {
-    try {
-      const base64Data = imageUrl.split(',')[1];
-      const response = await axios.post('/api/detect-objects', {
-        image_data: base64Data,
-        streamer: streamer_username
-      });
-      return response.data.detections || [];
-    } catch (error) {
-      console.error('AI detection error:', error);
-      return [];
-    }
-  }, [streamer_username]);
-
-  // Fetch thumbnail from the appropriate source based on platform
-  const fetchThumbnail = useCallback(async () => {
-    if (!isOnline || detectionActive.current || !thumbnail) return;
-
-    try {
-      detectionActive.current = true;
+  useEffect(() => {
+    if (platform.toLowerCase() === 'stripchat' && staticThumbnail) {
+      setThumbnail(staticThumbnail);
+      setLoading(false);
+    } else if (platform.toLowerCase() === 'chaturbate' && streamerName) {
       const timestamp = Date.now();
-      
-      // Determine thumbnail URL based on platform
-      let thumbnailUrl;
-      if (platform.toLowerCase() === 'stripchat' && streamerUid) {
-        // Use new Stripchat thumbnail URL
-        thumbnailUrl = `https://img.doppiocdn.com/thumbs/1741753200/${streamerUid}_webp`;
-      } else if (platform.toLowerCase() === 'chaturbate') {
-        // Default to Chaturbate thumbnail URL
-        thumbnailUrl = `https://jpeg.live.mmcdn.com/stream?room=${streamer_username}&t=${timestamp}`;
-      } else {
-        // Fallback thumbnail URL for other platforms
-        thumbnailUrl = `https://jpeg.live.mmcdn.com/stream?room=${streamer_username}&t=${timestamp}`;
-      }
-      
-      const res = await fetch(thumbnailUrl);
-      if (!res.ok) throw new Error('Stream offline');
-      
-      const blob = await res.blob();
-      const reader = new FileReader();
-      
-      reader.onload = async () => {
-        const imageUrl = reader.result;
-        setCurrentFrame(imageUrl);
-        setThumbnailError(false);
-        
-        const aiDetections = await detectObjects(imageUrl);
-        setDetections(aiDetections);
-        setIsOnline(true);
-      };
-      
-      reader.readAsDataURL(blob);
-    } catch (error) {
-      handleOfflineState(error);
-    } finally {
-      detectionActive.current = false;
+      const chaturbateThumbnail = `https://thumb.live.mmcdn.com/ri/${streamerName}.jpg?${timestamp}`;
+      setThumbnail(chaturbateThumbnail);
+      setLoading(false);
+    } else {
+      setLoading(false);
     }
-  }, [isOnline, streamer_username, thumbnail, detectObjects, platform, streamerUid]);
+  }, [platform, streamerUid, streamerName, staticThumbnail]);
 
-  // Handle offline state and retry logic
-  const handleOfflineState = (error) => {
-    console.error('Stream offline:', error);
-    setThumbnailError(true);
+  const handleThumbnailError = () => {
     setIsOnline(false);
-    clearTimeout(retryTimeout.current);
-    
-    const baseDelay = 60000 * Math.pow(2, 3); // 8 minutes max delay
-    const jitter = Math.random() * 15000;
-    retryTimeout.current = setTimeout(() => {
-      setIsOnline(true);
-      fetchThumbnail();
-    }, baseDelay + jitter);
+    setThumbnail(null);
   };
 
-  // Set interval to fetch thumbnails if in thumbnail mode
-  useEffect(() => {
-    if (thumbnail) {
-      fetchThumbnail();
-      const interval = setInterval(fetchThumbnail, isOnline ? 200 : 600);
-      return () => {
-        clearInterval(interval);
-        clearTimeout(retryTimeout.current);
-      };
-    }
-  }, [thumbnail, isOnline, fetchThumbnail]);
+  const handleModalToggle = () => {
+    setIsModalOpen(!isModalOpen);
+  };
 
-  // Merge alerts and detections after a slight delay
-  useEffect(() => {
-    const timeout = setTimeout(() => {
-      setVisibleAlerts([...alerts, ...detections]);
-    }, 300);
-    return () => clearTimeout(timeout);
-  }, [alerts, detections]);
-
-  // Render embedded player depending on platform and provided props
-  const renderEmbeddedPlayer = () => {
+  const renderPlayer = () => {
     if (platform.toLowerCase() === 'stripchat') {
-      // Platform-specific embedded player for Stripchat using HLS
       if (streamerUid) {
-        return (
-          <div className="embedded-player-container">
-            <HlsPlayer 
-              src={`https://b-hls-06.doppiocdn.live/hls/${streamerUid}/${streamerUid}.m3u8`}
-              className="embedded-player" 
-            />
-          </div>
-        );
+        return <HlsPlayer streamerUid={streamerUid} />;
+      } else {
+        return <div className="error-message">No valid streamer UID provided for Stripchat.</div>;
       }
-      // Fallback to a clickable link if no streamerUid is available.
-      return (
-        <div className="no-embedded-player">
-          <p>Embedded player is not supported on Stripchat without a valid streamer UID. Please click the link below to watch the live stream.</p>
-          <a 
-            href={`https://b-hls-06.doppiocdn.live/hls/${streamerUid}/${streamerUid}.m3u8`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="stream-link"
-          >
-            Watch Live Stream
-          </a>
-        </div>
-      );
     } else if (platform.toLowerCase() === 'chaturbate') {
-      // Platform-specific embedded player for Chaturbate using an iframe
-      return (
-        <div className="embedded-player-container">
-          <iframe
-            src={`https://chaturbate.com/in/?room=${streamer_username}&autoplay=1`}
-            className="embedded-player"
-            allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
-            allowFullScreen
-            frameBorder="0"
-            scrolling="no"
-          />
-        </div>
-      );
+      if (streamerName) {
+        return <IframePlayer streamerName={streamerName} />;
+      } else {
+        return <div className="error-message">No valid streamer name provided for Chaturbate.</div>;
+      }
     } else {
-      // Fallback embedded player for other platforms
-      return (
-        <div className="embedded-player-container">
-          <iframe
-            src={`https://cbxyz.com/in/?tour=SHBY&campaign=GoTLr&track=embed&room=${streamer_username}`}
-            className="embedded-player"
-            allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
-            allowFullScreen
-            frameBorder="0"
-            scrolling="no"
-          />
-        </div>
-      );
+      return <div className="error-message">Unsupported platform: {platform}.</div>;
     }
   };
 
   return (
     <div className="video-container">
-      {thumbnail ? (
-        <div className="thumbnail-wrapper">
-          {currentFrame && !thumbnailError ? (
-            <img
-              src={currentFrame}
-              alt="Live stream thumbnail"
-              className="thumbnail-image"
-              onError={() => setThumbnailError(true)}
-            />
-          ) : (
-            <div className="thumbnail-fallback">
-              <span>{isOnline ? 'Loading...' : 'Offline (Retrying)'}</span>
-            </div>
-          )}
-        </div>
+      {loading ? (
+        <div className="loading-message">Loading...</div>
+      ) : thumbnail && isOnline && !isModalOpen ? (
+        <img
+          src={thumbnail}
+          alt="Live stream thumbnail"
+          className="thumbnail-image"
+          onClick={handleModalToggle}
+          onError={handleThumbnailError}
+        />
       ) : (
-        renderEmbeddedPlayer()
+        renderPlayer()
       )}
 
-      <div className="detection-overlay">
-        {visibleAlerts.map((detection, index) => (
-          <div 
-            key={`${detection.class}-${index}`}
-            className={`alert-marker ${detection.source === 'chat' ? 'chat-alert' : 'ai-alert'}`}
-            style={{
-              left: `${detection.box[0]}%`,
-              top: `${detection.box[1]}%`,
-              width: `${detection.box[2] - detection.box[0]}%`,
-              height: `${detection.box[3] - detection.box[1]}%`
-            }}
-          >
-            <div className={`alert-label ${detection.source === 'chat' ? 'chat-label' : 'ai-label'}`}>
-              {detection.source === 'ai' ? (
-                `${detection.class} (${(detection.confidence * 100).toFixed(1)}%)`
-              ) : (
-                `⚠️ ${detection.class.replace('CHAT: ', '')}`
-              )}
-            </div>
+      {!loading && !isOnline && (
+        <div className="error-message">
+          {platform === 'stripchat' ? 'Stripchat stream is offline.' : 'Chaturbate stream is offline.'}
+        </div>
+      )}
+
+      {isModalOpen && (
+        <div className="modal-overlay" onClick={handleModalToggle}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            {renderPlayer()}
+            <button className="close-modal" onClick={handleModalToggle}>
+              &times;
+            </button>
           </div>
-        ))}
-      </div>
+        </div>
+      )}
 
       <style jsx>{`
         .video-container {
           position: relative;
           width: 100%;
+          height: 0;
           padding-top: 56.25%;
+          overflow: hidden;
           background: #000;
           border-radius: 8px;
-          overflow: hidden;
         }
 
-        .thumbnail-wrapper,
-        .embedded-player-container,
-        .no-embedded-player {
+        .loading-message {
           position: absolute;
           top: 0;
           left: 0;
           width: 100%;
           height: 100%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          color: white;
+          background: #000;
         }
 
         .thumbnail-image {
-          width: 100%;
-          height: 100%;
-          object-fit: cover;
-          transition: opacity 0.3s ease;
-        }
-
-        .thumbnail-fallback {
           position: absolute;
           top: 0;
           left: 0;
-          right: 0;
-          bottom: 0;
-          background: #333;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          color: #fff;
-          font-size: 0.9em;
-          animation: fadeIn 0.5s ease;
-        }
-
-        .embedded-player {
           width: 100%;
           height: 100%;
-          border: none;
-          background: #000;
+          object-fit: cover;
+          cursor: pointer;
         }
 
-        .no-embedded-player {
+        .error-message {
+          position: absolute;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
           display: flex;
-          flex-direction: column;
           align-items: center;
           justify-content: center;
-          background: #1a1a1a;
-          color: #fff;
+          color: white;
+          background: rgba(0, 0, 0, 0.7);
+          font-size: 1em;
           text-align: center;
           padding: 20px;
         }
 
-        .stream-link {
-          margin-top: 10px;
-          padding: 10px 20px;
-          background: #007bff;
-          color: #fff;
-          border-radius: 4px;
-          text-decoration: none;
-          transition: background 0.3s ease;
-        }
-
-        .stream-link:hover {
-          background: #0056b3;
-        }
-
-        .detection-overlay {
+        .hls-player-container {
           position: absolute;
           top: 0;
           left: 0;
-          right: 0;
-          bottom: 0;
-          pointer-events: none;
+          width: 100%;
+          height: 100%;
         }
 
-        .alert-marker {
+        .loading-overlay {
           position: absolute;
-          border: 2px solid;
-          background: transparent;
-          transition: all 0.3s ease;
-          transform: translateZ(0);
-          animation: pulseBox 1.5s infinite;
-        }
-
-        .alert-marker.chat-alert {
-          border-color: #44ff44aa;
-          background: #44ff4422;
-        }
-
-        .alert-marker.ai-alert {
-          border-color: #ffa500aa;
-          background: #ffa50022;
-        }
-
-        .alert-label {
-          position: absolute;
-          bottom: 100%;
+          top: 0;
           left: 0;
+          width: 100%;
+          height: 100%;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          background: rgba(0, 0, 0, 0.7);
+          z-index: 5;
+        }
+
+        .error-overlay {
+          position: absolute;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          background: rgba(0, 0, 0, 0.8);
+          z-index: 5;
           color: white;
-          padding: 4px 8px;
-          font-size: 0.8em;
-          border-radius: 4px;
-          white-space: nowrap;
-          backdrop-filter: blur(2px);
-          box-shadow: 0 2px 8px rgba(0,0,0,0.2);
-          animation: slideIn 0.3s ease-out;
         }
 
-        .chat-label {
-          background: #44ff44dd;
+        .error-icon {
+          font-size: 32px;
+          margin-bottom: 10px;
         }
 
-        .ai-label {
-          background: #ffa500dd;
+        .error-text {
+          text-align: center;
+          max-width: 80%;
         }
 
-        @keyframes pulseBox {
-          0% { opacity: 0.6; }
-          50% { opacity: 1; }
-          100% { opacity: 0.6; }
+        .loading-spinner {
+          width: 40px;
+          height: 40px;
+          border: 4px solid rgba(255, 255, 255, 0.3);
+          border-radius: 50%;
+          border-top: 4px solid white;
+          animation: spin 1s linear infinite;
         }
 
-        @keyframes slideIn {
-          from { transform: translateY(10px); opacity: 0; }
-          to { transform: translateY(0); opacity: 1; }
+        .loading-text {
+          color: white;
+          margin-top: 10px;
+          font-size: 14px;
         }
 
-        @keyframes fadeIn {
-          from { opacity: 0; }
-          to { opacity: 1; }
+        @keyframes spin {
+          0% { transform: rotate(0deg); }
+          100% { transform: rotate(360deg); }
         }
 
-        @media (max-width: 768px) {
-          .video-container {
-            padding-top: 75%;
-            border-radius: 0;
-          }
-          
-          .alert-label {
-            font-size: 0.7em;
-            padding: 2px 4px;
-          }
+        .modal-overlay {
+          position: fixed;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
+          background: rgba(0, 0, 0, 0.8);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 1000;
+        }
+
+        .modal-content {
+          position: relative;
+          width: 90%;
+          max-width: 1200px;
+          background: #1a1a1a;
+          border-radius: 8px;
+          padding: 20px;
+        }
+
+        .close-modal {
+          position: absolute;
+          top: 10px;
+          right: 10px;
+          background: transparent;
+          border: none;
+          color: white;
+          font-size: 24px;
+          cursor: pointer;
+        }
+
+        .close-modal:hover {
+          color: #ff4444;
         }
       `}</style>
     </div>

@@ -21,6 +21,7 @@ from notifications import send_chat_telegram_notification
 from scraping import scrape_stripchat_data, run_scrape_job, scrape_jobs
 from detection import detect_frame, detect_chat, update_flagged_objects, refresh_keywords
 from monitoring import start_monitoring, start_notification_monitor
+from models import Stream, ChaturbateStream, StripchatStream
 
 @app.route("/api/detect-chat", methods=["POST"])
 def detect_chat_from_image():
@@ -146,7 +147,15 @@ def delete_agent(agent_id):
 @app.route("/api/streams", methods=["GET"])
 @login_required(role="admin")
 def get_streams():
-    streams = Stream.query.all()
+    platform = request.args.get("platform", "").strip().lower()
+    
+    if platform == "chaturbate":
+        streams = ChaturbateStream.query.all()
+    elif platform == "stripchat":
+        streams = StripchatStream.query.all()
+    else:
+        streams = Stream.query.all()
+
     return jsonify([stream.serialize() for stream in streams])
 
 @app.route("/api/streams", methods=["POST"])
@@ -154,36 +163,52 @@ def get_streams():
 def create_stream():
     data = request.get_json()
     room_url = data.get("room_url", "").strip().lower()
+    platform = data.get("platform", "Chaturbate").strip()
+
     if not room_url:
         return jsonify({"message": "Room URL required"}), 400
-    platform = data.get("platform", "Chaturbate").strip()
+
+    # Validate platform-specific URLs
     if platform.lower() == "chaturbate" and "chaturbate.com/" not in room_url:
         return jsonify({"message": "Invalid Chaturbate URL"}), 400
     if platform.lower() == "stripchat" and "stripchat.com/" not in room_url:
         return jsonify({"message": "Invalid Stripchat URL"}), 400
-    streamer = room_url.rstrip("/").split("/")[-1]
+
+    # Check if stream already exists
     if Stream.query.filter_by(room_url=room_url).first():
         return jsonify({"message": "Stream exists"}), 400
-    stream = Stream(
-        room_url=room_url,
-        streamer_username=streamer,
-        type=platform.lower()
-    )
-    if platform.lower() == "stripchat":
+
+    # Create stream based on platform
+    streamer = room_url.rstrip("/").split("/")[-1]
+    if platform.lower() == "chaturbate":
+        stream = ChaturbateStream(
+            room_url=room_url,
+            streamer_username=streamer,
+            type="chaturbate"
+        )
+    elif platform.lower() == "stripchat":
         scraped_data = scrape_stripchat_data(room_url)
-        if scraped_data:
-            stream.streamer_uid = scraped_data["streamer_uid"]
-            stream.edge_server_url = scraped_data["edge_server_url"]
-            stream.blob_url = scraped_data.get("blob_url")
-            stream.static_thumbnail = scraped_data.get("static_thumbnail")
-        else:
-            return jsonify({"message": "Failed to scrape Stripchat details for the provided URL"}), 500
+        if not scraped_data:
+            return jsonify({"message": "Failed to scrape Stripchat details"}), 500
+
+        stream = StripchatStream(
+            room_url=room_url,
+            streamer_username=streamer,
+            type="stripchat",
+            streamer_uid=scraped_data["streamer_uid"],
+            edge_server_url=scraped_data["edge_server_url"],
+            blob_url=scraped_data.get("blob_url"),
+            static_thumbnail=scraped_data.get("static_thumbnail")
+        )
+    else:
+        return jsonify({"message": "Invalid platform"}), 400
+
     db.session.add(stream)
     db.session.commit()
+
     return jsonify({
         "message": "Stream created",
-        "stream": stream.serialize(),
-        "thumbnail": f"https://jpeg.live.mmcdn.com/stream?room={streamer}&f=0.8399472484345041"
+        "stream": stream.serialize()
     }), 201
 
 @app.route("/api/streams/<int:stream_id>", methods=["PUT"])
@@ -221,11 +246,15 @@ def delete_stream(stream_id):
     stream = Stream.query.get(stream_id)
     if not stream:
         return jsonify({"message": "Stream not found"}), 404
-    assignments = stream.assignments
-    for assignment in assignments:
+
+    # Delete associated assignments
+    for assignment in stream.assignments:
         db.session.delete(assignment)
+
+    # Delete the stream
     db.session.delete(stream)
     db.session.commit()
+
     return jsonify({"message": "Stream deleted"})
 
 @app.route("/api/scrape/stripchat", methods=["POST"])

@@ -3,6 +3,8 @@ import axios from 'axios';
 import Login from './components/Login';
 import AdminPanel from './components/AdminPanel';
 import AgentDashboard from './components/AgentDashboard';
+import VideoPlayer from './components/VideoPlayer';
+import HLSTester from './components/HLSTester';
 
 
 function App() {
@@ -107,6 +109,7 @@ function App() {
   };
 
   return (
+
     <div className="app-container">
       {role && (
         <header className="app-header">
@@ -125,6 +128,12 @@ function App() {
                   Notifications
                   {unreadCount > 0 && <span className="notification-badge">{unreadCount}</span>}
                 </button>
+                <button 
+  onClick={() => setActiveTab('hls-tester')} 
+  className={activeTab === 'hls-tester' ? 'active' : ''}
+>
+  HLS Tester
+</button>
               </nav>
             )}
             <button className="logout-button" onClick={handleLogout}>Logout</button>
@@ -136,6 +145,7 @@ function App() {
         {!role && <Login onLogin={handleLogin} />}
         {role === 'admin' && activeTab !== 'notifications' && <AdminPanel activeTab={activeTab} />}
         {role === 'agent' && <AgentDashboard />}
+        {role === 'admin' && activeTab === 'hls-tester' && <HLSTester />}
         {role === 'admin' && activeTab === 'notifications' && (
           <div className="notifications-tab">
             <h2>Notifications</h2>

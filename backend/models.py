@@ -13,6 +13,8 @@ class User(db.Model):
     staffid = db.Column(db.String(20))
     password = db.Column(db.String(120), nullable=False)
     role = db.Column(db.String(10), nullable=False, default="agent")
+
+    # Relationship with Assignment
     assignments = db.relationship("Assignment", back_populates="agent")
 
     def serialize(self):
@@ -33,12 +35,13 @@ class Stream(db.Model):
     room_url = db.Column(db.String(300), unique=True, nullable=False)
     streamer_username = db.Column(db.String(100))
     type = db.Column(db.String(50))  # Discriminator column
+
+    # Relationship with Assignment
     assignments = db.relationship("Assignment", back_populates="stream")
-    
+
     __mapper_args__ = {
         'polymorphic_on': type,
         'polymorphic_identity': 'stream',
-        'with_polymorphic': '*'
     }
 
     def serialize(self):
@@ -49,6 +52,8 @@ class Stream(db.Model):
             "platform": self.type.capitalize() if self.type else None,
         }
 
+
+# Chaturbate Stream Model
 class ChaturbateStream(Stream):
     __tablename__ = "chaturbate_streams"
     id = db.Column(db.Integer, db.ForeignKey("streams.id"), primary_key=True)
@@ -62,6 +67,7 @@ class ChaturbateStream(Stream):
         data["platform"] = "Chaturbate"
         return data
 
+# Stripchat Stream Model
 class StripchatStream(Stream):
     __tablename__ = "stripchat_streams"
     id = db.Column(db.Integer, db.ForeignKey("streams.id"), primary_key=True)
@@ -91,9 +97,10 @@ class Assignment(db.Model):
     agent_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
     stream_id = db.Column(db.Integer, db.ForeignKey("streams.id"), nullable=False)
     
+    # Relationships
     agent = db.relationship("User", back_populates="assignments")
     stream = db.relationship("Stream", back_populates="assignments")
-
+    
 class Log(db.Model):
     __tablename__ = "logs"
     id = db.Column(db.Integer, primary_key=True)

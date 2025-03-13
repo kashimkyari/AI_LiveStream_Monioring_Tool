@@ -73,16 +73,16 @@ const AdminPanel = ({ activeTab }) => {
     <div className="admin-panel">
       {activeTab === 'dashboard' && (
         <div className="tab-content">
-          <h3>Dashboard</h3>
+          <h3></h3>
           <div className="dashboard-info">
             <p><strong>Ongoing Streams:</strong> {dashboardData.ongoing_streams}</p>
             <div className="assignment-grid">
               {dashboardData.streams.map((stream) => (
                 <div key={stream.id} className="assignment-card" onClick={() => setSelectedAssignment(stream)}>
                   <VideoPlayer
-                    room_url={stream.room_url}
-                    streamer_username={stream.streamer_username}
-                    thumbnail={true}
+                    platform={stream.platform.toLowerCase()}
+                    streamerUid={stream.streamer_uid}
+                    streamerName={stream.streamer_username}
                     alerts={detectionAlerts[stream.room_url] || []}
                   />
                   {(detectionAlerts[stream.room_url]?.length > 0) && (
@@ -141,8 +141,10 @@ const AdminPanel = ({ activeTab }) => {
             <p><strong>Platform:</strong> {selectedAssignment.platform}</p>
             <p><strong>Streamer:</strong> {selectedAssignment.streamer_username}</p>
             <VideoPlayer 
-              room_url={selectedAssignment.room_url} 
-              streamer_username={selectedAssignment.streamer_username}
+              platform={selectedAssignment.platform.toLowerCase()}
+              streamerUid={selectedAssignment.streamer_uid}
+              streamerName={selectedAssignment.streamer_username}
+              staticThumbnail={selectedAssignment.static_thumbnail}
               alerts={detectionAlerts[selectedAssignment.room_url] || []}
             />
           </div>
