@@ -10,9 +10,9 @@ beautifulsoup4
 requests
 Pillow
 pytesseract
-ultralytics
 python-telegram-bot
 moviepy
 SpeechRecognition
 m3u8
+cloudscraper
 
