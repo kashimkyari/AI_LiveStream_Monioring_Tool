@@ -2,17 +2,21 @@ import React, { useState, useEffect, useRef } from 'react';
 import Hls from 'hls.js';
 import IframePlayer from './IframePlayer';
 
-// Import TensorFlow.js core and the coco-ssd model for object detection.
+// TensorFlow and models
 import '@tensorflow/tfjs';
 import * as cocoSsd from '@tensorflow-models/coco-ssd';
+import * as handpose from '@tensorflow-models/handpose';
+import * as bodyPix from '@tensorflow-models/body-pix';
 
 const HlsPlayer = ({ streamerUid, onDetection }) => {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
-  const modelRef = useRef(null); // Holds the loaded coco-ssd model
 
-  // State to hold allowed objects fetched from the backend API
-  const [allowedObjects, setAllowedObjects] = useState([]);
+  // Refs for the detection models
+  const modelRef = useRef(null); // coco-ssd
+  const handposeModelRef = useRef(null);
+  const bodyPixModelRef = useRef(null);
+
   // New state: holds flagged objects from admin panel settings
   const [flaggedObjects, setFlaggedObjects] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -21,11 +25,13 @@ const HlsPlayer = ({ streamerUid, onDetection }) => {
 
   // Correct streamerUid if needed
   const actualStreamerUid = streamerUid !== "${streamerUid}" ? streamerUid : "";
-  const hlsUrl = actualStreamerUid ? `https://b-hls-11.doppiocdn.live/hls/${actualStreamerUid}/${actualStreamerUid}.m3u8` : "";
+  const hlsUrl = actualStreamerUid
+    ? `https://b-hls-11.doppiocdn.live/hls/${actualStreamerUid}/${actualStreamerUid}.m3u8`
+    : "";
 
   // Load the coco-ssd model once on mount
   useEffect(() => {
-    const loadModel = async () => {
+    const loadCocoModel = async () => {
       try {
         modelRef.current = await cocoSsd.load();
         console.log("coco-ssd model loaded successfully");
@@ -33,37 +39,40 @@ const HlsPlayer = ({ streamerUid, onDetection }) => {
         console.error("Failed to load coco-ssd model:", error);
       }
     };
-    loadModel();
+    loadCocoModel();
   }, []);
 
-  // Fetch allowed objects list from the backend API
+  // Load additional detection models: handpose and BodyPix (for body segmentation)
   useEffect(() => {
-    const fetchAllowedObjects = async () => {
+    const loadAdditionalModels = async () => {
       try {
-        const response = await fetch('/api/objects');
-        if (!response.ok) {
-          throw new Error(`HTTP error! Status: ${response.status}`);
-        }
-        const data = await response.json();
-        setAllowedObjects(data);
+        const handposeModel = await handpose.load();
+        handposeModelRef.current = handposeModel;
+        console.log("Handpose model loaded successfully");
       } catch (error) {
-        console.error("Error fetching allowed objects:", error);
-        setAllowedObjects([]);
+        console.error("Failed to load handpose model:", error);
+      }
+      try {
+        const bodyPixModel = await bodyPix.load();
+        bodyPixModelRef.current = bodyPixModel;
+        console.log("BodyPix model loaded successfully");
+      } catch (error) {
+        console.error("Failed to load BodyPix model:", error);
       }
     };
-    fetchAllowedObjects();
+    loadAdditionalModels();
   }, []);
 
   // Fetch flagged objects from the backend API (flag settings from admin panel)
   useEffect(() => {
     const fetchFlaggedObjects = async () => {
       try {
-        const response = await fetch('/api/flagged-objects');
+        const response = await fetch('/api/objects');
         if (!response.ok) {
           throw new Error(`HTTP error! Status: ${response.status}`);
         }
         const data = await response.json();
-        // Assuming data is an array of strings or objects with an object_name field.
+        // Convert to lower case for consistency.
         const flagged = data.map(item =>
           typeof item === 'string' ? item.toLowerCase() : item.object_name.toLowerCase()
         );
@@ -76,26 +85,9 @@ const HlsPlayer = ({ streamerUid, onDetection }) => {
     fetchFlaggedObjects();
   }, []);
 
-  // Function to send detection event to backend for Telegram notifications.
-  // This endpoint is assumed to trigger the send_full_telegram_notification_sync in the backend.
-  const notifyDetection = async (detections) => {
-    try {
-      await fetch('/api/log-detection', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          streamerUid: actualStreamerUid,
-          detections,
-          timestamp: new Date().toISOString(),
-        }),
-      });
-      console.log("Detection event sent for notification");
-    } catch (error) {
-      console.error("Error sending detection notification:", error);
-    }
-  };
 
-  // Real-time object detection logic using the coco-ssd model
+
+  // Real-time detection logic using multiple TensorFlow.js models
   useEffect(() => {
     const video = videoRef.current;
     const canvas = canvasRef.current;
@@ -113,66 +105,104 @@ const HlsPlayer = ({ streamerUid, onDetection }) => {
       canvas.style.height = `${rect.height}px`;
     };
 
-    // Function to detect objects on the current video frame using coco-ssd
+    // Function to detect objects on the current video frame using all models
     const detectObjects = async () => {
       try {
-        if (!modelRef.current) {
-          console.warn("coco-ssd model not loaded yet");
-          return;
-        }
         if (video.videoWidth === 0 || video.videoHeight === 0) return;
-        
-        // Run object detection on the video frame.
-        const predictions = await modelRef.current.detect(video);
         updateCanvasSize();
         ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-        // Filter predictions: only include objects from the allowed list that meet the threshold.
-        const filteredPredictions = predictions.filter(prediction => {
-          const allowed = allowedObjects.find(
-            obj => obj.object_name.toLowerCase() === prediction.class.toLowerCase()
-          );
-          return allowed && prediction.score >= allowed.confidence_threshold;
-        });
+        const predictions = [];
 
-        // Draw annotations for filtered predictions.
-        filteredPredictions.forEach(prediction => {
-          const [x, y, width, height] = prediction.bbox;
-          const scaleX = canvas.width / video.videoWidth;
-          const scaleY = canvas.height / video.videoHeight;
-          const label = `${prediction.class} (${(prediction.score * 100).toFixed(1)}%)`;
+        // Advanced object detection via coco-ssd
+        if (modelRef.current) {
+          const cocoPredictions = await modelRef.current.detect(video);
+          cocoPredictions.forEach(pred => {
+            predictions.push({
+              class: pred.class.toLowerCase(),
+              score: pred.score,
+              bbox: pred.bbox, // [x, y, width, height]
+            });
+          });
+        }
 
-          if (height / width >= 1.5) {
-            const newWidth = width * scaleX * 0.33; // roughly one-third of original width
-            const centerX = (x + width / 2) * scaleX;
-            const newX = centerX - newWidth / 2;
-            const newY = y * scaleY;
-            const newHeight = height * scaleY;
-            ctx.strokeStyle = 'red';
-            ctx.lineWidth = 2;
-            ctx.strokeRect(newX, newY, newWidth, newHeight);
-            ctx.fillStyle = 'red';
-            ctx.font = '14px Arial';
-            ctx.fillText(label, newX, newY - 5);
-          } else {
-            ctx.strokeStyle = 'red';
-            ctx.lineWidth = 2;
-            ctx.strokeRect(x * scaleX, y * scaleY, width * scaleX, height * scaleY);
-            ctx.fillStyle = 'red';
-            ctx.font = '14px Arial';
-            ctx.fillText(label, x * scaleX, (y * scaleY) > 10 ? (y * scaleY - 5) : (y * scaleY + 15));
+        // Hand pose detection
+        if (handposeModelRef.current) {
+          const handPredictions = await handposeModelRef.current.estimateHands(video);
+          handPredictions.forEach(pred => {
+            const topLeft = pred.boundingBox.topLeft;
+            const bottomRight = pred.boundingBox.bottomRight;
+            const x = topLeft[0];
+            const y = topLeft[1];
+            const width = bottomRight[0] - topLeft[0];
+            const height = bottomRight[1] - topLeft[1];
+            predictions.push({
+              class: 'hand',
+              score: pred.handInViewConfidence,
+              bbox: [x, y, width, height],
+            });
+          });
+        }
+
+        // Body segmentation detection (using BodyPix)
+        if (bodyPixModelRef.current) {
+          const segmentation = await bodyPixModelRef.current.segmentPerson(video, {
+            internalResolution: 'medium',
+            segmentationThreshold: 0.7,
+          });
+          // Compute bounding box from segmentation mask
+          let minX = segmentation.width, minY = segmentation.height, maxX = 0, maxY = 0;
+          let found = false;
+          for (let i = 0; i < segmentation.data.length; i++) {
+            if (segmentation.data[i] === 1) { // 1 indicates a person pixel
+              found = true;
+              const x = i % segmentation.width;
+              const y = Math.floor(i / segmentation.width);
+              if (x < minX) minX = x;
+              if (y < minY) minY = y;
+              if (x > maxX) maxX = x;
+              if (y > maxY) maxY = y;
+            }
           }
-        });
+          if (found) {
+            // Scale the bounding box coordinates to the video dimensions.
+            const scaleX = video.videoWidth / segmentation.width;
+            const scaleY = video.videoHeight / segmentation.height;
+            const bbox = [
+              minX * scaleX,
+              minY * scaleY,
+              (maxX - minX) * scaleX,
+              (maxY - minY) * scaleY,
+            ];
+            predictions.push({
+              class: 'person',
+              score: 1.0, // Fixed score for segmentation
+              bbox,
+            });
+          }
+        }
 
-        // Notify parent component with all allowed detections.
-        if (onDetection) onDetection(filteredPredictions);
-
-        // Filter flagged predictions based on admin panel flag settings.
-        const flaggedPredictions = filteredPredictions.filter(prediction =>
-          flaggedObjects.includes(prediction.class.toLowerCase())
+        // Filter predictions: only include those that are flagged
+        const flaggedPredictions = predictions.filter(prediction =>
+          flaggedObjects.includes(prediction.class)
         );
 
-        // Send Telegram notification only if flagged objects are detected.
+        // Draw annotations for flagged predictions.
+        flaggedPredictions.forEach(prediction => {
+          const [x, y, width, height] = prediction.bbox;
+          const label = `${prediction.class} (${(prediction.score * 100).toFixed(1)}%)`;
+          ctx.strokeStyle = 'red';
+          ctx.lineWidth = 2;
+          ctx.strokeRect(x, y, width, height);
+          ctx.fillStyle = 'red';
+          ctx.font = '14px Arial';
+          ctx.fillText(label, x, y > 10 ? y - 5 : y + 15);
+        });
+
+        // Notify parent component with flagged detections.
+        if (onDetection) onDetection(flaggedPredictions);
+
+        // Send Telegram notification if flagged objects are detected.
         if (flaggedPredictions.length > 0) {
           notifyDetection(flaggedPredictions);
         }
@@ -201,7 +231,7 @@ const HlsPlayer = ({ streamerUid, onDetection }) => {
       video.removeEventListener('ended', handlePause);
       clearInterval(detectionInterval);
     };
-  }, [onDetection, allowedObjects, flaggedObjects]);
+  }, [onDetection, flaggedObjects]);
 
   // HLS player initialization logic
   useEffect(() => {
@@ -288,7 +318,7 @@ const HlsPlayer = ({ streamerUid, onDetection }) => {
 };
 
 const VideoPlayer = ({
-  platform = "stripchat", 
+  platform = "stripchat",
   streamerUid,
   streamerName,
   staticThumbnail,
@@ -357,7 +387,9 @@ const VideoPlayer = ({
 
       {!loading && !isOnline && (
         <div className="error-message">
-          {platform === 'stripchat' ? 'Stripchat stream is offline.' : 'Chaturbate stream is offline.'}
+          {platform === 'stripchat'
+            ? 'Stripchat stream is offline.'
+            : 'Chaturbate stream is offline.'}
         </div>
       )}
 

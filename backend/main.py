@@ -2,7 +2,6 @@ from config import app
 from extensions import db
 from models import User
 from routes import *
-from monitoring import start_monitoring, start_notification_monitor
 from cleanup import start_chat_cleanup_thread, start_detection_cleanup_thread
 import logging
 
@@ -36,10 +35,11 @@ with app.app_context():
         db.session.commit()
 
 # Start background tasks.
-start_monitoring()
 start_notification_monitor()
 start_chat_cleanup_thread()
 start_detection_cleanup_thread()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, threaded=True, debug=False)
+
+# gunicorn --workers 5 --bind 0.0.0.0:5000 main:app 
