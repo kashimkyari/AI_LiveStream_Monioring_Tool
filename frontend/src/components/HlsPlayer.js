@@ -1,141 +1,185 @@
-import React, { useRef, useEffect, useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import Hls from 'hls.js';
+import IframePlayer from './IframePlayer';
 
-const HlsPlayer = ({ hlsUrl }) => {
+const HlsPlayer = ({ streamerUid, onDetection }) => {
   const videoRef = useRef(null);
+  const canvasRef = useRef(null);
+  const actualStreamerUid = streamerUid !== "${streamerUid}" ? streamerUid : "";
+  const hlsUrl = actualStreamerUid ? `https://b-hls-11.doppiocdn.live/hls/${actualStreamerUid}/${actualStreamerUid}.m3u8` : "";
   const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState(null);
+  const [hasError, setHasError] = useState(false);
+  const [errorMessage, setErrorMessage] = useState("");
+  const [detections, setDetections] = useState([]);
 
   useEffect(() => {
     let hls;
-
+    
+    if (!hlsUrl) {
+      setIsLoading(false);
+      setHasError(true);
+      setErrorMessage("Invalid streamer UID");
+      return;
+    }
+    
     const initializePlayer = () => {
       if (Hls.isSupported()) {
-        hls = new Hls();
+        hls = new Hls({
+          autoStartLoad: true,
+          startLevel: -1,
+          debug: false,
+          maxBufferLength: 30,
+        });
+        
         hls.loadSource(hlsUrl);
         hls.attachMedia(videoRef.current);
-
+        
         hls.on(Hls.Events.MANIFEST_PARSED, () => {
           setIsLoading(false);
-          videoRef.current.play();
+          setHasError(false);
+          videoRef.current.muted = true; // Ensure the video is muted for autoplay
+          videoRef.current.play().catch(error => {
+            console.error('Autoplay failed:', error);
+          });
         });
-
+        
         hls.on(Hls.Events.ERROR, (event, data) => {
-          console.error('HLS Error:', data);
-          setError('Failed to load the stream. Please try again.');
-          setIsLoading(false);
+          if (data.details === "manifestLoadError") {
+            setErrorMessage(`Stream cannot be loaded (${data.response ? data.response.code : 'unknown error'})`);
+            setHasError(true);
+            setIsLoading(false);
+          }
+          
+          if (data.fatal) {
+            switch(data.type) {
+              case Hls.ErrorTypes.NETWORK_ERROR:
+                if (data.details !== "manifestLoadError") {
+                  hls.startLoad();
+                } else {
+                  setIsLoading(false);
+                  setHasError(true);
+                }
+                break;
+              case Hls.ErrorTypes.MEDIA_ERROR:
+                hls.recoverMediaError();
+                break;
+              default:
+                hls.destroy();
+                setIsLoading(false);
+                setHasError(true);
+                setErrorMessage("Fatal playback error occurred");
+                break;
+            }
+          }
         });
       } else if (videoRef.current.canPlayType('application/vnd.apple.mpegurl')) {
         videoRef.current.src = hlsUrl;
-        videoRef.current.play();
-        setIsLoading(false);
+        videoRef.current.muted = true; // Ensure the video is muted for autoplay
+        
+        videoRef.current.addEventListener('loadedmetadata', () => {
+          setIsLoading(false);
+          videoRef.current.play().catch(error => {
+            console.error('Autoplay failed:', error);
+          });
+        });
+        
+        videoRef.current.addEventListener('error', (e) => {
+          setIsLoading(false);
+          setHasError(true);
+          setErrorMessage("Error loading stream in Safari");
+        });
       } else {
-        setError('HLS is not supported in this browser.');
         setIsLoading(false);
+        setHasError(true);
+        setErrorMessage("HLS is not supported in this browser");
       }
     };
 
     initializePlayer();
 
-    // Cleanup function
     return () => {
       if (hls) {
         hls.destroy();
       }
     };
-  }, [hlsUrl]);
+  }, [hlsUrl, streamerUid]);
 
-  // Handle modal resize
   useEffect(() => {
-    const handleResize = () => {
-      if (videoRef.current) {
-        videoRef.current.style.width = '100%';
-        videoRef.current.style.height = '100%';
+    const canvas = canvasRef.current;
+    const video = videoRef.current;
+    const ctx = canvas.getContext('2d');
+
+    const drawDetections = () => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      detections.forEach(detection => {
+        const [x1, y1, x2, y2] = detection.box;
+        ctx.strokeStyle = 'red';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+        ctx.fillStyle = 'red';
+        ctx.font = '16px Arial';
+        ctx.fillText(`${detection.class} (${(detection.confidence * 100).toFixed(1)}%)`, x1, y1 - 5);
+      });
+    };
+
+    const captureFrame = async () => {
+      if (video && video.readyState >= 2) {
+        const canvas = document.createElement('canvas');
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        const imageData = canvas.toDataURL('image/jpeg');
+
+        try {
+          const response = await fetch('/api/detect-objects', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ image_data: imageData.split(',')[1] }),
+          });
+          const data = await response.json();
+          if (data.detections) {
+            setDetections(data.detections);
+            drawDetections();
+          }
+        } catch (error) {
+          console.error('Error detecting objects:', error);
+        }
       }
     };
 
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, []);
+    const interval = setInterval(captureFrame, 1000); // Capture frame every second
+
+    return () => clearInterval(interval);
+  }, [detections]);
 
   return (
     <div className="hls-player-container">
       {isLoading && (
         <div className="loading-overlay">
-          <div className="loading-spinner" />
-          <p>Loading stream...</p>
+          <div className="loading-spinner"></div>
+          <div className="loading-text">Loading stream...</div>
         </div>
       )}
-
-      {error && (
+      {hasError && (
         <div className="error-overlay">
-          <p>{error}</p>
+          <div className="error-icon">⚠️</div>
+          <div className="error-text">{errorMessage || "Error loading stream"}</div>
         </div>
       )}
-
       <video
         ref={videoRef}
-        controls
-        autoPlay
-        muted
+        autoPlay // Ensure autoplay is enabled
+        muted // Ensure muted is enabled for autoplay
         playsInline
-        style={{ width: '100%', height: '100%' }}
+        style={{ width: '100%', height: '100%', objectFit: 'cover' }}
       />
-
-      <style jsx>{`
-        .hls-player-container {
-          position: relative;
-          width: 100%;
-          height: 0;
-          padding-bottom: 56.25%; /* 16:9 aspect ratio */
-          background: #000;
-          border-radius: 8px;
-          overflow: hidden;
-        }
-
-        video {
-          position: absolute;
-          top: 0;
-          left: 0;
-          width: 100%;
-          height: 100%;
-        }
-
-        .loading-overlay,
-        .error-overlay {
-          position: absolute;
-          top: 0;
-          left: 0;
-          width: 100%;
-          height: 100%;
-          display: flex;
-          flex-direction: column;
-          align-items: center;
-          justify-content: center;
-          background: rgba(0, 0, 0, 0.8);
-          z-index: 10;
-        }
-
-        .loading-spinner {
-          border: 4px solid rgba(255, 255, 255, 0.3);
-          border-top: 4px solid #007bff;
-          border-radius: 50%;
-          width: 40px;
-          height: 40px;
-          animation: spin 1s linear infinite;
-        }
-
-        @keyframes spin {
-          0% { transform: rotate(0deg); }
-          100% { transform: rotate(360deg); }
-        }
-
-        .error-overlay p {
-          color: #ff4444;
-          font-size: 1.2em;
-          text-align: center;
-        }
-      `}</style>
+      <canvas
+        ref={canvasRef}
+        style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none' }}
+      />
     </div>
   );
 };

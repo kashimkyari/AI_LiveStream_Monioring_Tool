@@ -10,8 +10,7 @@ const ChaturbateTable = ({ streams, onDelete }) => {
       <thead>
         <tr>
           <th>ID</th>
-          <th>Room URL</th>
-          <th>Streamer Username</th>
+          <th>Username</th>
           <th>Actions</th>
         </tr>
       </thead>
@@ -19,16 +18,7 @@ const ChaturbateTable = ({ streams, onDelete }) => {
         {streams.map((stream) => (
           <tr key={stream.id}>
             <td>{stream.id}</td>
-            <td>
-              <a
-                href={stream.room_url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="stream-link"
-              >
-                {stream.room_url}
-              </a>
-            </td>
+            
             <td>{stream.streamer_username}</td>
             <td>
               <button 
@@ -53,10 +43,8 @@ const StripchatTable = ({ streams, onDelete }) => {
       <thead>
         <tr>
           <th>ID</th>
-          <th>Room URL</th>
-          <th>Streamer Username</th>
+          <th>Username</th>
           <th>Streamer UID</th>
-          <th>Edge Server URL</th>
           <th>Thumbnail</th>
           <th>Actions</th>
         </tr>
@@ -65,24 +53,10 @@ const StripchatTable = ({ streams, onDelete }) => {
         {streams.map((stream) => (
           <tr key={stream.id}>
             <td>{stream.id}</td>
-            <td>
-              <a
-                href={stream.room_url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="stream-link"
-              >
-                {stream.room_url}
-              </a>
-            </td>
+            
             <td>{stream.streamer_username}</td>
             <td>{stream.streamer_uid || 'N/A'}</td>
-            <td className="edge-url">
-              {stream.edge_server_url ? 
-                <span className="truncate-text">{stream.edge_server_url}</span> : 
-                'N/A'
-              }
-            </td>
+            
             <td>
               {stream.static_thumbnail ? (
                 <img

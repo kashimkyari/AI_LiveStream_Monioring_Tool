@@ -551,14 +551,20 @@ def detect_objects():
         data = request.get_json()
         if "image_data" not in data:
             return jsonify({"error": "Missing image data"}), 400
+
         try:
+            # Decode the base64 image data
             img_bytes = base64.b64decode(data["image_data"])
             img = Image.open(BytesIO(img_bytes)).convert("RGB")
             frame = np.array(img)
         except Exception as e:
             return jsonify({"error": "Invalid image data"}), 400
+
+        # Update flagged objects and perform detection
         update_flagged_objects()
         results = detect_frame(frame)
+
+        # Convert detection results to percentage-based coordinates
         height, width = frame.shape[:2]
         detections = []
         for det in results:
@@ -575,6 +581,7 @@ def detect_objects():
                 })
             except KeyError:
                 continue
+
         return jsonify({"detections": detections})
     except Exception as e:
         return jsonify({"error": "Processing failed"}), 500
@@ -627,3 +634,58 @@ def get_livestream():
         return jsonify({"stream_url": stream_url})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+@app.route("/api/stream-detection", methods=["GET"])
+def get_stream_detections():
+    """
+    Returns detected objects for ongoing streams.
+    """
+    try:
+        cutoff = datetime.utcnow() - timedelta(seconds=10)  # Fetch recent detections
+        logs = Log.query.filter(Log.timestamp >= cutoff, Log.event_type == "object_detection").all()
+
+        detections = []
+        for log in logs:
+            detections.append({
+                "stream_url": log.room_url,
+                "detections": log.details.get("detections", []),
+                "image_url": log.details.get("image_url", ""),
+                "timestamp": log.timestamp.isoformat(),
+            })
+
+        return jsonify({"detections": detections})
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/assign", methods=["POST"])
+@login_required(role="admin")
+def assign_agent_to_stream():
+    data = request.get_json()
+    agent_id = data.get("agent_id")
+    stream_id = data.get("stream_id")
+
+    if not agent_id or not stream_id:
+        return jsonify({"message": "Agent ID and Stream ID are required"}), 400
+
+    # Check if the agent exists
+    agent = User.query.filter_by(id=agent_id, role="agent").first()
+    if not agent:
+        return jsonify({"message": "Agent not found"}), 404
+
+    # Check if the stream exists
+    stream = Stream.query.get(stream_id)
+    if not stream:
+        return jsonify({"message": "Stream not found"}), 404
+
+    # Check if the stream is already assigned to another agent
+    existing_assignment = Assignment.query.filter_by(stream_id=stream_id).first()
+    if existing_assignment:
+        return jsonify({"message": "Stream is already assigned to another agent"}), 400
+
+    # Create a new assignment
+    assignment = Assignment(agent_id=agent_id, stream_id=stream_id)
+    db.session.add(assignment)
+    db.session.commit()
+
+    return jsonify({"message": "Agent assigned to stream successfully"}), 201

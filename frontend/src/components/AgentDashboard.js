@@ -3,6 +3,7 @@ import axios from 'axios';
 import VideoPlayer from './VideoPlayer';
 
 const AgentDashboard = ({ onLogout }) => {
+  // State initialization for dashboard, logs, and UI controls.
   const [dashboardData, setDashboardData] = useState({ ongoing_streams: 0, assignments: [] });
   const [selectedAssignment, setSelectedAssignment] = useState(null);
   const [logs, setLogs] = useState([]);
@@ -15,6 +16,7 @@ const AgentDashboard = ({ onLogout }) => {
   const [expandedLogId, setExpandedLogId] = useState(null);
 
   useEffect(() => {
+    // Fetch agent session information
     const fetchAgentName = async () => {
       try {
         const res = await axios.get('/api/session');
@@ -26,6 +28,7 @@ const AgentDashboard = ({ onLogout }) => {
       }
     };
 
+    // Fetch dashboard data (assigned streams and ongoing streams)
     const fetchDashboard = async () => {
       try {
         const res = await axios.get('/api/agent/dashboard');
@@ -36,6 +39,7 @@ const AgentDashboard = ({ onLogout }) => {
       }
     };
 
+    // Fetch logs (note: this endpoint returns 404; update your backend or remove if logs are optional)
     const fetchLogs = async () => {
       setLoading(true);
       try {
@@ -47,6 +51,7 @@ const AgentDashboard = ({ onLogout }) => {
       setLoading(false);
     };
 
+    // Set up EventSource for real-time detection events
     const eventSource = new EventSource('/api/detection-events');
     eventSource.onmessage = (e) => {
       const data = JSON.parse(e.data);
@@ -61,6 +66,7 @@ const AgentDashboard = ({ onLogout }) => {
       eventSource.close();
     };
 
+    // Initialize object detection if not active
     const initObjectDetection = () => {
       if (!objectDetectionActive) {
         console.log('Initializing object detection...');
@@ -68,11 +74,13 @@ const AgentDashboard = ({ onLogout }) => {
       }
     };
 
+    // Initial API calls
     fetchAgentName();
     fetchDashboard();
     fetchLogs();
     initObjectDetection();
-    
+
+    // Poll dashboard data every 10 seconds for updates
     const interval = setInterval(fetchDashboard, 10000);
     return () => {
       clearInterval(interval);
@@ -80,6 +88,7 @@ const AgentDashboard = ({ onLogout }) => {
     };
   }, [objectDetectionActive]);
 
+  // Utility function to parse detection log details
   const parseDetectionLog = (details) => {
     const result = {};
     if (!details || typeof details !== 'string') return result;
@@ -116,6 +125,7 @@ const AgentDashboard = ({ onLogout }) => {
     return result;
   };
 
+  // Filter logs based on search text
   const filteredLogs = logs.filter((log) => {
     const searchText = filter.toLowerCase();
     let detailsText = "";
@@ -132,38 +142,43 @@ const AgentDashboard = ({ onLogout }) => {
     );
   });
 
+  // Toggle expanded log view for more details
   const toggleExpandedLog = (id) => {
     setExpandedLogId(expandedLogId === id ? null : id);
   };
 
+  // Close the modal view for a selected assignment
   const closeModal = () => setSelectedAssignment(null);
 
   return (
     <div className="agent-dashboard">
-      
-
       <div className="dashboard-content">
         <section className="streams-section">
           <h2>Assigned Streams</h2>
           <div className="assignment-grid">
-            {dashboardData.assignments.map((assignment) => (
-              <div 
-                key={assignment.id} 
-                className="assignment-card" 
-                onClick={() => setSelectedAssignment(assignment)}
-              >
-                <VideoPlayer 
-                  room_url={assignment.room_url} 
-                  streamer_username={assignment.streamer_username}
-                  thumbnail={true}
-                  alerts={detectionAlerts[assignment.room_url] || []}
-                />
-                <div className="assignment-details">
-                  <p><strong>{assignment.streamer_username}</strong></p>
-                  <p><small>{assignment.platform}</small></p>
+            {dashboardData.assignments && dashboardData.assignments.length > 0 ? (
+              dashboardData.assignments.map((assignment) => (
+                <div 
+                  key={assignment.id} 
+                  className="assignment-card" 
+                  onClick={() => setSelectedAssignment(assignment)}
+                >
+                  <VideoPlayer 
+                    platform={assignment.platform.toLowerCase()}  // Same props as in admin panel
+                    streamerUid={assignment.streamer_uid}
+                    streamerName={assignment.streamer_username}
+                    alerts={detectionAlerts[assignment.room_url] || []}
+                    thumbnail={true}
+                  />
+                  <div className="assignment-details">
+                    <p><strong>{assignment.streamer_username}</strong></p>
+                    <p><small>{assignment.platform}</small></p>
+                  </div>
                 </div>
-              </div>
-            ))}
+              ))
+            ) : (
+              <p>No assigned streams found.</p>
+            )}
           </div>
         </section>
 
@@ -289,8 +304,10 @@ const AgentDashboard = ({ onLogout }) => {
             <button className="close-button" onClick={closeModal}>×</button>
             <h2>{selectedAssignment.streamer_username}'s Stream</h2>
             <VideoPlayer 
-              room_url={selectedAssignment.room_url} 
-              streamer_username={selectedAssignment.streamer_username}
+              platform={selectedAssignment.platform.toLowerCase()}
+              streamerUid={selectedAssignment.streamer_uid}
+              streamerName={selectedAssignment.streamer_username}
+              staticThumbnail={selectedAssignment.static_thumbnail}
               alerts={detectionAlerts[selectedAssignment.room_url] || []}
             />
             <div className="stream-info">
@@ -301,7 +318,7 @@ const AgentDashboard = ({ onLogout }) => {
         </div>
       )}
 
-      <style jsx>{`
+      <style>{`
         /* Overall container and typography */
         .agent-dashboard {
           min-height: 100vh;
@@ -309,37 +326,6 @@ const AgentDashboard = ({ onLogout }) => {
           color: #e0e0e0;
           font-family: 'Inter', sans-serif;
           animation: slideUp 0.6s cubic-bezier(0.22, 1, 0.36, 1);
-        }
-
-        /* Navbar */
-        .navbar {
-          background: #1a1a1a;
-          padding: 1rem 2rem;
-          border-bottom: 1px solid #2d2d2d;
-        }
-        .nav-container {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          max-width: 900px;
-          margin: 0 auto;
-        }
-        .nav-left {
-          font-size: 1.2rem;
-          color: #007bff;
-        }
-        .logout-button {
-          padding: 0.5rem 1.5rem;
-          background: linear-gradient(135deg, #007bff, #0056b3);
-          border: none;
-          border-radius: 6px;
-          color: white;
-          cursor: pointer;
-          transition: all 0.3s ease;
-        }
-        .logout-button:hover {
-          transform: translateY(-2px);
-          box-shadow: 0 5px 15px rgba(0,123,255,0.3);
         }
 
         /* Main dashboard content */
@@ -525,9 +511,6 @@ const AgentDashboard = ({ onLogout }) => {
 
         /* Responsive adjustments */
         @media (max-width: 768px) {
-          .nav-container {
-            padding: 0 1rem;
-          }
           .dashboard-content {
             margin: 20px auto;
             padding: 20px;

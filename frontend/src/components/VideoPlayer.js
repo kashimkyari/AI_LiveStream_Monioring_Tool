@@ -2,104 +2,225 @@ import React, { useState, useEffect, useRef } from 'react';
 import Hls from 'hls.js';
 import IframePlayer from './IframePlayer';
 
-const HlsPlayer = ({ streamerUid }) => {
+// Import TensorFlow.js core and the coco-ssd model for object detection.
+import '@tensorflow/tfjs';
+import * as cocoSsd from '@tensorflow-models/coco-ssd';
+
+const HlsPlayer = ({ streamerUid, onDetection }) => {
   const videoRef = useRef(null);
-  const actualStreamerUid = streamerUid !== "${streamerUid}" ? streamerUid : "";
-  const hlsUrl = actualStreamerUid ? `https://b-hls-11.doppiocdn.live/hls/${actualStreamerUid}/${actualStreamerUid}.m3u8` : "";
+  const canvasRef = useRef(null);
+  const modelRef = useRef(null); // Holds the loaded coco-ssd model
+
+  // State to hold allowed objects fetched from the backend API
+  const [allowedObjects, setAllowedObjects] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [hasError, setHasError] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
 
+  // Correct streamerUid if needed
+  const actualStreamerUid = streamerUid !== "${streamerUid}" ? streamerUid : "";
+  const hlsUrl = actualStreamerUid ? `https://b-hls-11.doppiocdn.live/hls/${actualStreamerUid}/${actualStreamerUid}.m3u8` : "";
+
+  // Load the coco-ssd model once on mount
+  useEffect(() => {
+    const loadModel = async () => {
+      try {
+        modelRef.current = await cocoSsd.load();
+        console.log("coco-ssd model loaded successfully");
+      } catch (error) {
+        console.error("Failed to load coco-ssd model:", error);
+      }
+    };
+    loadModel();
+  }, []);
+
+  // Fetch allowed objects list from the backend API
+  useEffect(() => {
+    const fetchAllowedObjects = async () => {
+      try {
+        const response = await fetch('/api/objects');
+        if (!response.ok) {
+          throw new Error(`HTTP error! Status: ${response.status}`);
+        }
+        const data = await response.json();
+        setAllowedObjects(data);
+      } catch (error) {
+        console.error("Error fetching allowed objects:", error);
+        setAllowedObjects([]);
+      }
+    };
+    fetchAllowedObjects();
+  }, []);
+
+  // Function to send detection event to backend for Telegram notifications.
+  const notifyDetection = async (detections) => {
+    try {
+      // Immediately send the detection event to your backend.
+      await fetch('/api/log-detection', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          streamerUid: actualStreamerUid,
+          detections,
+          timestamp: new Date().toISOString(),
+        }),
+      });
+      console.log("Detection event sent for notification");
+    } catch (error) {
+      console.error("Error sending detection notification:", error);
+    }
+  };
+
+  // Real-time object detection logic using the coco-ssd model
+  useEffect(() => {
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    if (!video || !canvas) return;
+    const ctx = canvas.getContext('2d');
+    let detectionInterval;
+
+    // Update canvas size to match video display dimensions
+    const updateCanvasSize = () => {
+      if (!video.parentElement) return;
+      const rect = video.getBoundingClientRect();
+      canvas.width = rect.width;
+      canvas.height = rect.height;
+      canvas.style.width = `${rect.width}px`;
+      canvas.style.height = `${rect.height}px`;
+    };
+
+    // Function to detect objects on the current video frame using coco-ssd
+    const detectObjects = async () => {
+      try {
+        if (!modelRef.current) {
+          console.warn("coco-ssd model not loaded yet");
+          return;
+        }
+        if (video.videoWidth === 0 || video.videoHeight === 0) return;
+        
+        // Run object detection on the video frame.
+        const predictions = await modelRef.current.detect(video);
+        updateCanvasSize();
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        // Filter predictions: only include objects from the allowed list that meet the threshold.
+        const filteredPredictions = predictions.filter(prediction => {
+          const allowed = allowedObjects.find(
+            obj => obj.object_name.toLowerCase() === prediction.class.toLowerCase()
+          );
+          return allowed && prediction.score >= allowed.confidence_threshold;
+        });
+
+        // Draw annotations for filtered predictions.
+        filteredPredictions.forEach(prediction => {
+          // Get the original bounding box values: [x, y, width, height] in video pixels.
+          const [x, y, width, height] = prediction.bbox;
+          // Scaling factors for canvas drawing.
+          const scaleX = canvas.width / video.videoWidth;
+          const scaleY = canvas.height / video.videoHeight;
+          // Prepare the label text.
+          const label = `${prediction.class} (${(prediction.score * 100).toFixed(1)}%)`;
+
+          // If the object is tall (height/width >= 1.5), draw a vertical rectangle that is narrower.
+          if (height / width >= 1.5) {
+            const newWidth = width * scaleX * 0.33; // roughly one-third of original width
+            const centerX = (x + width / 2) * scaleX;
+            const newX = centerX - newWidth / 2;
+            const newY = y * scaleY;
+            const newHeight = height * scaleY;
+            ctx.strokeStyle = 'red';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(newX, newY, newWidth, newHeight);
+            ctx.fillStyle = 'red';
+            ctx.font = '14px Arial';
+            ctx.fillText(label, newX, newY - 5);
+          } else {
+            // For other objects, draw the standard bounding box.
+            ctx.strokeStyle = 'red';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(x * scaleX, y * scaleY, width * scaleX, height * scaleY);
+            ctx.fillStyle = 'red';
+            ctx.font = '14px Arial';
+            ctx.fillText(label, x * scaleX, (y * scaleY) > 10 ? (y * scaleY - 5) : (y * scaleY + 15));
+          }
+        });
+
+        // Notify parent component of the filtered detections.
+        if (onDetection) onDetection(filteredPredictions);
+        // Immediately send notification when any allowed object is detected.
+        if (filteredPredictions.length > 0) {
+          notifyDetection(filteredPredictions);
+        }
+      } catch (error) {
+        console.error("Detection error:", error);
+      }
+    };
+
+    const handlePlay = () => {
+      updateCanvasSize();
+      detectionInterval = setInterval(detectObjects, 1000); // Detect objects every second
+    };
+
+    const handlePause = () => {
+      clearInterval(detectionInterval);
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+    };
+
+    video.addEventListener('play', handlePlay);
+    video.addEventListener('pause', handlePause);
+    video.addEventListener('ended', handlePause);
+
+    return () => {
+      video.removeEventListener('play', handlePlay);
+      video.removeEventListener('pause', handlePause);
+      video.removeEventListener('ended', handlePause);
+      clearInterval(detectionInterval);
+    };
+  }, [onDetection, allowedObjects]);
+
+  // HLS player initialization logic
   useEffect(() => {
     let hls;
-    
     if (!hlsUrl) {
       setIsLoading(false);
       setHasError(true);
       setErrorMessage("Invalid streamer UID");
       return;
     }
-    
+
     const initializePlayer = () => {
       if (Hls.isSupported()) {
-        hls = new Hls({
-          autoStartLoad: true,
-          startLevel: -1,
-          debug: false,
-          maxBufferLength: 30,
-        });
-        
+        hls = new Hls({ autoStartLoad: true, startLevel: -1, debug: false });
         hls.loadSource(hlsUrl);
         hls.attachMedia(videoRef.current);
-        
+
         hls.on(Hls.Events.MANIFEST_PARSED, () => {
           setIsLoading(false);
-          setHasError(false);
-          videoRef.current.muted = true; // Ensure the video is muted for autoplay
-          videoRef.current.play().catch(error => {
-            console.error('Autoplay failed:', error);
-          });
+          videoRef.current.play().catch(console.error);
         });
-        
+
         hls.on(Hls.Events.ERROR, (event, data) => {
-          if (data.details === "manifestLoadError") {
-            setErrorMessage(`Stream cannot be loaded (${data.response ? data.response.code : 'unknown error'})`);
+          if (data.fatal) {
             setHasError(true);
             setIsLoading(false);
-          }
-          
-          if (data.fatal) {
-            switch(data.type) {
-              case Hls.ErrorTypes.NETWORK_ERROR:
-                if (data.details !== "manifestLoadError") {
-                  hls.startLoad();
-                } else {
-                  setIsLoading(false);
-                  setHasError(true);
-                }
-                break;
-              case Hls.ErrorTypes.MEDIA_ERROR:
-                hls.recoverMediaError();
-                break;
-              default:
-                hls.destroy();
-                setIsLoading(false);
-                setHasError(true);
-                setErrorMessage("Fatal playback error occurred");
-                break;
-            }
+            setErrorMessage(data.details || 'Playback error');
           }
         });
       } else if (videoRef.current.canPlayType('application/vnd.apple.mpegurl')) {
         videoRef.current.src = hlsUrl;
-        videoRef.current.muted = true; // Ensure the video is muted for autoplay
-        
         videoRef.current.addEventListener('loadedmetadata', () => {
           setIsLoading(false);
-          videoRef.current.play().catch(error => {
-            console.error('Autoplay failed:', error);
-          });
-        });
-        
-        videoRef.current.addEventListener('error', (e) => {
-          setIsLoading(false);
-          setHasError(true);
-          setErrorMessage("Error loading stream in Safari");
+          videoRef.current.play().catch(console.error);
         });
       } else {
-        setIsLoading(false);
         setHasError(true);
-        setErrorMessage("HLS is not supported in this browser");
+        setIsLoading(false);
+        setErrorMessage("HLS not supported");
       }
     };
 
     initializePlayer();
-
-    return () => {
-      if (hls) {
-        hls.destroy();
-      }
-    };
+    return () => hls?.destroy();
   }, [hlsUrl, streamerUid]);
 
   return (
@@ -110,18 +231,32 @@ const HlsPlayer = ({ streamerUid }) => {
           <div className="loading-text">Loading stream...</div>
         </div>
       )}
+
       {hasError && (
         <div className="error-overlay">
           <div className="error-icon">⚠️</div>
-          <div className="error-text">{errorMessage || "Error loading stream"}</div>
+          <div className="error-text">{errorMessage}</div>
         </div>
       )}
+
       <video
         ref={videoRef}
-        autoPlay // Ensure autoplay is enabled
-        muted // Ensure muted is enabled for autoplay
+        muted
+        autoPlay
         playsInline
-        style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+        style={{ width: '100%', height: '100%' }}
+      />
+
+      <canvas
+        ref={canvasRef}
+        style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          width: '100%',
+          height: '100%',
+          pointerEvents: 'none',
+        }}
       />
     </div>
   );
@@ -132,6 +267,7 @@ const VideoPlayer = ({
   streamerUid,
   streamerName,
   staticThumbnail,
+  onDetection,
 }) => {
   const [thumbnail, setThumbnail] = useState(null);
   const [isOnline, setIsOnline] = useState(true);
@@ -140,7 +276,6 @@ const VideoPlayer = ({
 
   useEffect(() => {
     if (platform.toLowerCase() === 'stripchat' && staticThumbnail) {
-      setThumbnail(staticThumbnail);
       setLoading(false);
     } else if (platform.toLowerCase() === 'chaturbate' && streamerName) {
       const timestamp = Date.now();
@@ -164,7 +299,7 @@ const VideoPlayer = ({
   const renderPlayer = () => {
     if (platform.toLowerCase() === 'stripchat') {
       if (streamerUid) {
-        return <HlsPlayer streamerUid={streamerUid} />;
+        return <HlsPlayer streamerUid={streamerUid} onDetection={onDetection} />;
       } else {
         return <div className="error-message">No valid streamer UID provided for Stripchat.</div>;
       }

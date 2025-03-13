@@ -6,6 +6,7 @@ import VisualTestPage from './VisualTestPage';
 import AssignmentPage from './AssignmentPage';
 import StreamsPage from './StreamsPage';
 import FlagSettingsPage from './FlagSettingsPage';
+import AgentsPage from './AgentsPage'; // Import the AgentsPage component
 
 const AdminPanel = ({ activeTab }) => {
   const [dashboardData, setDashboardData] = useState({ ongoing_streams: 0, streams: [] });
@@ -116,7 +117,7 @@ const AdminPanel = ({ activeTab }) => {
       {activeTab === 'assign' && <AssignmentPage />}
       {activeTab === 'streams' && <StreamsPage />}
       {activeTab === 'flag' && <FlagSettingsPage />}
-
+      {activeTab === 'agents' && <AgentsPage />} {/* Render AgentsPage when "Agents" tab is active */}
       {activeTab === 'scraper' && (
         <div className="tab-content">
           <h3>Scraper</h3>

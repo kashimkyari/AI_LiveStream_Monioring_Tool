@@ -31,21 +31,24 @@ const AssignmentPage = () => {
     }
   };
 
-  const handleAssign = async () => {
-    if (!selectedAgentId || !selectedStreamId) {
-      alert('Both Agent and Stream must be selected.');
-      return;
-    }
-    try {
-      const res = await axios.post('/api/assign', {
-        agent_id: selectedAgentId,
-        stream_id: selectedStreamId,
-      });
-      alert(res.data.message);
-    } catch (err) {
-      alert(err.response?.data?.message || 'Assignment failed.');
-    }
-  };
+const handleAssign = async () => {
+  if (!selectedAgentId || !selectedStreamId) {
+    alert('Both Agent and Stream must be selected.');
+    return;
+  }
+  try {
+    const res = await axios.post('/api/assign', {
+      agent_id: selectedAgentId, // Use "agent_id" instead of "agentId"
+      stream_id: selectedStreamId, // Use "stream_id" instead of "streamId"
+    });
+    alert(res.data.message);
+    // Refresh the streams and agents list after assignment
+    fetchAgents();
+    fetchStreams();
+  } catch (err) {
+    alert(err.response?.data?.message || 'Assignment failed.');
+  }
+};
 
   useEffect(() => {
     fetchAgents();

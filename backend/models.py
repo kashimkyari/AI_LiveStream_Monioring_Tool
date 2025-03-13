@@ -1,6 +1,5 @@
-# models.py
 from datetime import datetime
-from extensions import db  # Import db from extensions
+from extensions import db
 
 class User(db.Model):
     __tablename__ = "users"
@@ -15,7 +14,7 @@ class User(db.Model):
     role = db.Column(db.String(10), nullable=False, default="agent")
 
     # Relationship with Assignment
-    assignments = db.relationship("Assignment", back_populates="agent")
+    assignments = db.relationship('Assignment', back_populates='agent', lazy=True)
 
     def serialize(self):
         return {
@@ -37,7 +36,7 @@ class Stream(db.Model):
     type = db.Column(db.String(50))  # Discriminator column
 
     # Relationship with Assignment
-    assignments = db.relationship("Assignment", back_populates="stream")
+    assignments = db.relationship('Assignment', back_populates='stream', lazy=True)
 
     __mapper_args__ = {
         'polymorphic_on': type,
@@ -52,8 +51,6 @@ class Stream(db.Model):
             "platform": self.type.capitalize() if self.type else None,
         }
 
-
-# Chaturbate Stream Model
 class ChaturbateStream(Stream):
     __tablename__ = "chaturbate_streams"
     id = db.Column(db.Integer, db.ForeignKey("streams.id"), primary_key=True)
@@ -67,7 +64,6 @@ class ChaturbateStream(Stream):
         data["platform"] = "Chaturbate"
         return data
 
-# Stripchat Stream Model
 class StripchatStream(Stream):
     __tablename__ = "stripchat_streams"
     id = db.Column(db.Integer, db.ForeignKey("streams.id"), primary_key=True)
@@ -94,13 +90,22 @@ class StripchatStream(Stream):
 class Assignment(db.Model):
     __tablename__ = "assignments"
     id = db.Column(db.Integer, primary_key=True)
-    agent_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
-    stream_id = db.Column(db.Integer, db.ForeignKey("streams.id"), nullable=False)
-    
+    agent_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    stream_id = db.Column(db.Integer, db.ForeignKey('streams.id'), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
     # Relationships
-    agent = db.relationship("User", back_populates="assignments")
-    stream = db.relationship("Stream", back_populates="assignments")
-    
+    agent = db.relationship('User', back_populates='assignments')
+    stream = db.relationship('Stream', back_populates='assignments')
+
+    def serialize(self):
+        return {
+            "id": self.id,
+            "agent_id": self.agent_id,
+            "stream_id": self.stream_id,
+            "created_at": self.created_at.isoformat(),
+        }
+
 class Log(db.Model):
     __tablename__ = "logs"
     id = db.Column(db.Integer, primary_key=True)
