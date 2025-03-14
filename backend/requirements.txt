@@ -17,4 +17,5 @@ twilio
 blinker
 selenium-wire 
 opencv-python
+gunicorn
 
