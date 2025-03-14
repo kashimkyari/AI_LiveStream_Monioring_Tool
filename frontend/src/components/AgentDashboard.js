@@ -1,61 +1,19 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import axios from 'axios';
-import Hls from 'hls.js'; // HLS library for m3u8 streams
-
-// HLSPlayer component to play m3u8 streams directly.
-// Security Note: Ensure the stream URL is sanitized if sourced from user input.
-const HLSPlayer = ({ src, poster, alerts, className }) => {
-  const videoRef = useRef(null);
-
-  useEffect(() => {
-    let hls;
-    const video = videoRef.current;
-
-    if (video) {
-      if (Hls.isSupported()) {
-        hls = new Hls();
-        hls.loadSource(src);
-        hls.attachMedia(video);
-        hls.on(Hls.Events.ERROR, (event, data) => {
-          console.error('HLS error:', data);
-        });
-      } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-        // Native HLS support (e.g., Safari)
-        video.src = src;
-      } else {
-        console.error('HLS not supported in this browser');
-      }
-    }
-
-    return () => {
-      if (hls) {
-        hls.destroy();
-      }
-    };
-  }, [src]);
-
-  return (
-    <video 
-      ref={videoRef} 
-      controls 
-      poster={poster}
-      className={className}
-      style={{ width: '100%', height: 'auto', borderRadius: '4px' }}
-    />
-  );
-};
+import VideoPlayer from './VideoPlayer';
 
 const AgentDashboard = ({ onLogout }) => {
-  // State for dashboard data, selected assignment, agent info, detection alerts, etc.
+  // State initialization for dashboard, logs, and UI controls.
   const [dashboardData, setDashboardData] = useState({ ongoing_streams: 0, assignments: [] });
   const [selectedAssignment, setSelectedAssignment] = useState(null);
+  const [loading, setLoading] = useState(false);
   const [agentName, setAgentName] = useState('');
   const [detectionAlerts, setDetectionAlerts] = useState({});
   const [lastNotification, setLastNotification] = useState(0);
   const [objectDetectionActive, setObjectDetectionActive] = useState(false);
-
+  
   useEffect(() => {
-    // Fetch the agent session info.
+    // Fetch agent session information
     const fetchAgentName = async () => {
       try {
         const res = await axios.get('/api/session');
@@ -67,18 +25,29 @@ const AgentDashboard = ({ onLogout }) => {
       }
     };
 
-    // Fetch dashboard data: assigned streams and ongoing streams.
+    // Fetch dashboard data (assigned streams and ongoing streams) and retrieve HLS URLs for each assignment
     const fetchDashboard = async () => {
       try {
         const res = await axios.get('/api/agent/dashboard');
         console.log('Agent dashboard data loaded:', res.data);
-        setDashboardData(res.data);
+        const assignments = res.data.assignments || [];
+        // For each assignment, fetch the m3u8 (HLS) URL
+        const assignmentsWithHLS = await Promise.all(assignments.map(async (assignment) => {
+          try {
+            const hlsRes = await axios.get(`/api/stream/${assignment.streamer_uid}/hls`);
+            return { ...assignment, m3u8_url: hlsRes.data.m3u8_url };
+          } catch (err) {
+            console.error(`Error fetching HLS URL for assignment ${assignment.id}:`, err);
+            return { ...assignment, m3u8_url: null };
+          }
+        }));
+        setDashboardData({ ...res.data, assignments: assignmentsWithHLS });
       } catch (error) {
         console.error('Error fetching agent dashboard data:', error);
       }
     };
 
-    // Set up real-time detection alerts via EventSource.
+    // Set up EventSource for real-time detection events
     const eventSource = new EventSource('/api/detection-events');
     eventSource.onmessage = (e) => {
       const data = JSON.parse(e.data);
@@ -86,17 +55,6 @@ const AgentDashboard = ({ onLogout }) => {
         ...prev,
         [data.stream_url]: data.detections
       }));
-
-      // Trigger notifications (throttled to once per minute)
-      if (data.detections?.length > 0 && Date.now() - lastNotification > 60000) {
-        const detectedItems = data.detections.map(d => d.class).join(', ');
-        if (Notification.permission === 'granted') {
-          new Notification('Object Detected', {
-            body: `Detected ${detectedItems} in ${data.stream_url}`
-          });
-          setLastNotification(Date.now());
-        }
-      }
     };
 
     eventSource.onerror = (err) => {
@@ -104,7 +62,7 @@ const AgentDashboard = ({ onLogout }) => {
       eventSource.close();
     };
 
-    // Initialize object detection if not already active.
+    // Initialize object detection if not active
     const initObjectDetection = () => {
       if (!objectDetectionActive) {
         console.log('Initializing object detection...');
@@ -112,20 +70,20 @@ const AgentDashboard = ({ onLogout }) => {
       }
     };
 
-    // Initial API calls.
+    // Initial API calls
     fetchAgentName();
     fetchDashboard();
     initObjectDetection();
 
-    // Poll dashboard data every 10 seconds.
+    // Poll dashboard data every 10 seconds for updates
     const interval = setInterval(fetchDashboard, 10000);
     return () => {
       clearInterval(interval);
       eventSource.close();
     };
-  }, [objectDetectionActive, lastNotification]);
+  }, [objectDetectionActive]);
 
-  // Close the modal view.
+  // Close the modal view for a selected assignment
   const closeModal = () => setSelectedAssignment(null);
 
   return (
@@ -141,17 +99,14 @@ const AgentDashboard = ({ onLogout }) => {
                   className="assignment-card" 
                   onClick={() => setSelectedAssignment(assignment)}
                 >
-                  {/* HLSPlayer is used to preview the stream */}
-                  <HLSPlayer 
-                    src={assignment.stream_url}  // Expecting an m3u8 URL
-                    poster={assignment.static_thumbnail}
-                    className="video-preview"
+                  <VideoPlayer 
+                    platform={assignment.platform.toLowerCase()}  // Same props as in admin panel
+                    streamerUid={assignment.streamer_uid}
+                    streamerName={assignment.streamer_username}
+                    alerts={detectionAlerts[assignment.room_url] || []}
+                    thumbnail={true}
+                    hlsUrl={assignment.m3u8_url}  // Pass the fetched HLS URL to render the video via HLSPlayer
                   />
-                  {detectionAlerts[assignment.room_url] && detectionAlerts[assignment.room_url].length > 0 && (
-                    <div className="detection-alert-badge">
-                      {detectionAlerts[assignment.room_url].length} DETECTIONS
-                    </div>
-                  )}
                   <div className="assignment-details">
                     <p><strong>{assignment.streamer_username}</strong></p>
                     <p><small>{assignment.platform}</small></p>
@@ -170,10 +125,13 @@ const AgentDashboard = ({ onLogout }) => {
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
             <button className="close-button" onClick={closeModal}>×</button>
             <h2>{selectedAssignment.streamer_username}'s Stream</h2>
-            <HLSPlayer 
-              src={selectedAssignment.stream_url} 
-              poster={selectedAssignment.static_thumbnail}
-              className="modal-video-player"
+            <VideoPlayer 
+              platform={selectedAssignment.platform.toLowerCase()}
+              streamerUid={selectedAssignment.streamer_uid}
+              streamerName={selectedAssignment.streamer_username}
+              staticThumbnail={selectedAssignment.static_thumbnail}
+              alerts={detectionAlerts[selectedAssignment.room_url] || []}
+              hlsUrl={selectedAssignment.m3u8_url}  // Pass HLS URL in modal view as well
             />
             <div className="stream-info">
               <p><strong>Platform:</strong> {selectedAssignment.platform}</p>
@@ -183,14 +141,17 @@ const AgentDashboard = ({ onLogout }) => {
         </div>
       )}
 
-      <style jsx>{`
+      <style>{`
+        /* Overall container and typography */
         .agent-dashboard {
           min-height: 100vh;
-          background: #121212;
+          background: linear-gradient(135deg, #121212, #1a1a1a);
           color: #e0e0e0;
           font-family: 'Inter', sans-serif;
           animation: slideUp 0.6s cubic-bezier(0.22, 1, 0.36, 1);
         }
+
+        /* Main dashboard content */
         .dashboard-content {
           max-width: 900px;
           margin: 40px auto;
@@ -199,9 +160,12 @@ const AgentDashboard = ({ onLogout }) => {
           border-radius: 15px;
           box-shadow: 0 8px 30px rgba(0,0,0,0.5);
         }
+
         h2, h3 {
           margin-bottom: 1rem;
         }
+
+        /* Streams Section */
         .streams-section {
           margin-bottom: 2rem;
         }
@@ -217,7 +181,6 @@ const AgentDashboard = ({ onLogout }) => {
           border: 1px solid #3d3d3d;
           cursor: pointer;
           transition: transform 0.3s ease, box-shadow 0.3s ease;
-          position: relative;
         }
         .assignment-card:hover {
           transform: translateY(-5px);
@@ -229,29 +192,8 @@ const AgentDashboard = ({ onLogout }) => {
           background: #252525;
           text-align: center;
         }
-        .video-preview {
-          width: 100%;
-          height: 150px;
-          object-fit: cover;
-        }
-        .detection-alert-badge {
-          position: absolute;
-          top: 10px;
-          right: 10px;
-          background: #ff4444;
-          color: white;
-          padding: 5px 10px;
-          border-radius: 15px;
-          font-size: 0.8rem;
-          font-weight: bold;
-          animation: pulse 1s infinite;
-          z-index: 2;
-        }
-        @keyframes pulse {
-          0% { transform: scale(1); }
-          50% { transform: scale(1.05); }
-          100% { transform: scale(1); }
-        }
+
+        /* Modal styles */
         .modal-overlay {
           position: fixed;
           top: 0;
@@ -267,8 +209,8 @@ const AgentDashboard = ({ onLogout }) => {
         }
         .modal-content {
           background: #2d2d2d;
-          padding: 20px;
-          border-radius: 8px;
+          padding: 1.5rem;
+          border-radius: 12px;
           max-width: 600px;
           width: 90%;
           position: relative;
@@ -276,22 +218,21 @@ const AgentDashboard = ({ onLogout }) => {
           border: 1px solid #3d3d3d;
           box-shadow: 0 15px 30px rgba(0,0,0,0.4);
         }
-        @keyframes zoomIn {
-          from { transform: scale(0.8); opacity: 0; }
-          to { transform: scale(1); opacity: 1; }
-        }
         .close-button {
           position: absolute;
-          top: 10px;
-          right: 10px;
+          top: 1rem;
+          right: 1rem;
           background: #ff4444;
           color: #fff;
           border: none;
           border-radius: 50%;
-          width: 30px;
-          height: 30px;
+          width: 32px;
+          height: 32px;
           cursor: pointer;
-          font-weight: bold;
+          font-size: 1.2rem;
+          display: flex;
+          align-items: center;
+          justify-content: center;
           transition: all 0.3s ease;
         }
         .close-button:hover {
@@ -303,10 +244,18 @@ const AgentDashboard = ({ onLogout }) => {
           background: #252525;
           border-radius: 8px;
         }
+
+        /* Animations */
         @keyframes slideUp {
           from { opacity: 0; transform: translateY(20px); }
           to { opacity: 1; transform: translateY(0); }
         }
+        @keyframes zoomIn {
+          from { transform: scale(0.8); opacity: 0; }
+          to { transform: scale(1); opacity: 1; }
+        }
+
+        /* Responsive adjustments */
         @media (max-width: 768px) {
           .dashboard-content {
             margin: 20px auto;
