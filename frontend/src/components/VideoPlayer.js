@@ -18,7 +18,7 @@ const HlsPlayer = ({ m3u8Url, onDetection }) => {
   const handposeModelRef = useRef(null);
   const bodyPixModelRef = useRef(null);
 
-  // New state: holds flagged objects from admin panel settings
+  // State for flagged objects and playback errors
   const [flaggedObjects, setFlaggedObjects] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [hasError, setHasError] = useState(false);
@@ -107,6 +107,8 @@ const HlsPlayer = ({ m3u8Url, onDetection }) => {
         if (video.videoWidth === 0 || video.videoHeight === 0) return;
         updateCanvasSize();
         ctx.clearRect(0, 0, canvas.width, canvas.height);
+        // Draw the current video frame onto the canvas before adding annotations.
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
         const predictions = [];
 
@@ -183,6 +185,14 @@ const HlsPlayer = ({ m3u8Url, onDetection }) => {
           flaggedObjects.includes(prediction.class)
         );
 
+        // Determine the detected object (highest confidence) from flagged predictions
+        let detectedObject = null;
+        if (flaggedPredictions.length > 0) {
+          detectedObject = flaggedPredictions.reduce((prev, curr) =>
+            prev.score > curr.score ? prev : curr
+          ).class;
+        }
+
         // Draw annotations for flagged predictions.
         flaggedPredictions.forEach(prediction => {
           const [x, y, width, height] = prediction.bbox;
@@ -200,7 +210,7 @@ const HlsPlayer = ({ m3u8Url, onDetection }) => {
 
         // Send detection to backend for logging
         if (flaggedPredictions.length > 0 && !notificationSent) {
-          // Capture the annotated frame
+          // Capture the annotated frame from the canvas (video frame + annotations)
           const annotatedImage = canvas.toDataURL('image/jpeg', 0.8);
 
           axios.post('/api/detect-objects', {
@@ -208,6 +218,7 @@ const HlsPlayer = ({ m3u8Url, onDetection }) => {
             detections: flaggedPredictions,
             timestamp: new Date().toISOString(),
             annotated_image: annotatedImage,
+            detected_object: detectedObject, // Pass the detected object
           });
 
           // Set notification sent to true and reset after 10 seconds
@@ -327,7 +338,7 @@ const HlsPlayer = ({ m3u8Url, onDetection }) => {
 
 const VideoPlayer = ({
   platform = "stripchat",
-  streamerUid,
+  streamerUid, // no longer used for fetching streams
   streamerName,
   staticThumbnail,
   onDetection,
@@ -337,8 +348,9 @@ const VideoPlayer = ({
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [m3u8Url, setM3u8Url] = useState(null);
+  const [fetchedStreamerUsername, setFetchedStreamerUsername] = useState(null);
 
-  // Fetch the m3u8 URL for Chaturbate streams
+  // Fetch the m3u8 URL for both Chaturbate and Stripchat streams based on streamerName
   useEffect(() => {
     if (platform.toLowerCase() === 'chaturbate' && streamerName) {
       const fetchM3u8Url = async () => {
@@ -348,25 +360,49 @@ const VideoPlayer = ({
             throw new Error(`HTTP error! Status: ${response.status}`);
           }
           const data = await response.json();
-          if (data.length > 0 && data[0].m3u8_url) {
-            setM3u8Url(data[0].m3u8_url);
+          // Use platform-specific field for Chaturbate
+          if (data.length > 0 && data[0].chaturbate_m3u8_url) {
+            setM3u8Url(data[0].chaturbate_m3u8_url);
           } else {
             throw new Error("No m3u8 URL found for the stream");
           }
         } catch (error) {
-          console.error("Error fetching m3u8 URL:", error);
+          console.error("Error fetching m3u8 URL for Chaturbate:", error);
           setIsOnline(false);
         } finally {
           setLoading(false);
         }
       };
       fetchM3u8Url();
-    } else if (platform.toLowerCase() === 'stripchat' && staticThumbnail) {
-      setLoading(false);
+    } else if (platform.toLowerCase() === 'stripchat' && streamerName) {
+      const fetchM3u8Url = async () => {
+        try {
+          // API call for Stripchat streams filtered by streamerName
+          const response = await fetch(`/api/streams?platform=stripchat&streamer=${streamerName}`);
+          if (!response.ok) {
+            throw new Error(`HTTP error! Status: ${response.status}`);
+          }
+          const data = await response.json();
+          // Use platform-specific field for Stripchat
+          if (data.length > 0 && data[0].stripchat_m3u8_url) {
+            setM3u8Url(data[0].stripchat_m3u8_url);
+            // Store the streamer_username from the API response for potential use
+            setFetchedStreamerUsername(data[0].streamer_username);
+          } else {
+            throw new Error("No m3u8 URL found for the stream");
+          }
+        } catch (error) {
+          console.error("Error fetching m3u8 URL for Stripchat:", error);
+          setIsOnline(false);
+        } finally {
+          setLoading(false);
+        }
+      };
+      fetchM3u8Url();
     } else {
       setLoading(false);
     }
-  }, [platform, streamerUid, streamerName, staticThumbnail]);
+  }, [platform, streamerName, staticThumbnail]);
 
   const handleThumbnailError = () => {
     setIsOnline(false);
@@ -379,10 +415,10 @@ const VideoPlayer = ({
 
   const renderPlayer = () => {
     if (platform.toLowerCase() === 'stripchat') {
-      if (streamerUid) {
-        return <HlsPlayer m3u8Url={`https://b-hls-11.doppiocdn.live/hls/${streamerUid}/${streamerUid}.m3u8`} onDetection={onDetection} />;
+      if (m3u8Url) {
+        return <HlsPlayer m3u8Url={m3u8Url} onDetection={onDetection} />;
       } else {
-        return <div className="error-message">No valid streamer UID provided for Stripchat.</div>;
+        return <div className="error-message">No valid m3u8 URL provided for Stripchat.</div>;
       }
     } else if (platform.toLowerCase() === 'chaturbate') {
       if (m3u8Url) {
@@ -413,7 +449,7 @@ const VideoPlayer = ({
 
       {!loading && !isOnline && (
         <div className="error-message">
-          {platform === 'stripchat'
+          {platform.toLowerCase() === 'stripchat'
             ? 'Stripchat stream is offline.'
             : 'Chaturbate stream is offline.'}
         </div>
@@ -439,6 +475,7 @@ const VideoPlayer = ({
           overflow: hidden;
           background: #000;
           border-radius: 8px;
+          object-fit: cover;
         }
 
         .loading-message {

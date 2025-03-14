@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 
 // Platform-specific stream table components
+
 const ChaturbateTable = ({ streams, onDelete }) => {
   if (streams.length === 0) return <p>No Chaturbate streams available.</p>;
   
@@ -11,6 +12,7 @@ const ChaturbateTable = ({ streams, onDelete }) => {
         <tr>
           <th>ID</th>
           <th>Username</th>
+          <th>M3U8 URL</th>
           <th>Actions</th>
         </tr>
       </thead>
@@ -19,6 +21,19 @@ const ChaturbateTable = ({ streams, onDelete }) => {
           <tr key={stream.id}>
             <td>{stream.id}</td>
             <td>{stream.streamer_username}</td>
+            <td>
+              {stream.chaturbate_m3u8_url ? (
+                <a
+                  href={stream.chaturbate_m3u8_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Open Stream
+                </a>
+              ) : (
+                'N/A'
+              )}
+            </td>
             <td>
               <button 
                 onClick={() => onDelete(stream.id)} 
@@ -43,38 +58,42 @@ const StripchatTable = ({ streams, onDelete }) => {
         <tr>
           <th>ID</th>
           <th>Username</th>
-          <th>Streamer UID</th>
-          <th>Thumbnail</th>
+          <th>M3U8 URL</th>
           <th>Actions</th>
         </tr>
       </thead>
       <tbody>
-        {streams.map((stream) => (
-          <tr key={stream.id}>
-            <td>{stream.id}</td>
-            <td>{stream.streamer_username}</td>
-            <td>{stream.streamer_uid || 'N/A'}</td>
-            <td>
-              {stream.static_thumbnail ? (
-                <img
-                  src={stream.static_thumbnail}
-                  alt="Thumbnail"
-                  className="thumbnail-image"
-                />
-              ) : (
-                'N/A'
-              )}
-            </td>
-            <td>
-              <button 
-                onClick={() => onDelete(stream.id)} 
-                className="delete-button"
-              >
-                Delete
-              </button>
-            </td>
-          </tr>
-        ))}
+        {streams.map((stream) => {
+          // Use the correct URL property for Stripchat streams: stripchat_m3u8_url
+          const streamUrl = stream.stripchat_m3u8_url;
+          return (
+            <tr key={stream.id}>
+              <td>{stream.id}</td>
+              <td>{stream.streamer_username}</td>
+              <td>
+                {streamUrl ? (
+                  <a
+                    href={streamUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    Open Stream
+                  </a>
+                ) : (
+                  'N/A'
+                )}
+              </td>
+              <td>
+                <button 
+                  onClick={() => onDelete(stream.id)} 
+                  className="delete-button"
+                >
+                  Delete
+                </button>
+              </td>
+            </tr>
+          );
+        })}
       </tbody>
     </table>
   );
@@ -99,8 +118,11 @@ const AddStreamForm = ({ onAddStream }) => {
         platform: platform
       });
       
-      // Call parent's add handler with the new stream data
-      onAddStream(response.data.stream);
+      // Ensure the new stream object includes the platform as type.
+      const newStream = { ...response.data.stream, type: platform };
+      
+      // Call parent's add handler with the new stream data.
+      onAddStream(newStream);
       setRoomUrl('');
       setIsSubmitting(false);
     } catch (err) {
@@ -203,12 +225,13 @@ function StreamsPage() {
 
   // Add a new stream to the corresponding platform list and set the active tab
   const handleAddStream = (newStream) => {
-    if (newStream.platform.toLowerCase() === 'chaturbate') {
+    // Use newStream.type (now reliably set) to determine the platform
+    if (newStream.type.toLowerCase() === 'chaturbate') {
       setChaturbateStreams((prevStreams) => [...prevStreams, newStream]);
-    } else if (newStream.platform.toLowerCase() === 'stripchat') {
+    } else if (newStream.type.toLowerCase() === 'stripchat') {
       setStripchatStreams((prevStreams) => [...prevStreams, newStream]);
     }
-    setActiveTab(newStream.platform.toLowerCase());
+    setActiveTab(newStream.type.toLowerCase());
   };
 
   // Initial data fetch for both platforms
@@ -453,12 +476,6 @@ function StreamsPage() {
 
         .streams-table tr:hover {
           background: #252525;
-        }
-
-        .thumbnail-image {
-          width: 6rem;
-          height: auto;
-          border-radius: 4px;
         }
 
         .delete-button {

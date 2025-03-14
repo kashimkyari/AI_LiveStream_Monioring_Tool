@@ -7,48 +7,57 @@ const AssignmentPage = () => {
   const [selectedAgentId, setSelectedAgentId] = useState('');
   const [selectedStreamId, setSelectedStreamId] = useState('');
 
+  // Fetch agents from the backend
   const fetchAgents = async () => {
     try {
       const res = await axios.get('/api/agents');
       setAgentList(res.data);
       if (res.data.length > 0 && !selectedAgentId) {
-        setSelectedAgentId(res.data[0].id);
+        // Convert to string for consistency in the select element
+        setSelectedAgentId(res.data[0].id.toString());
       }
     } catch (error) {
       console.error('Error fetching agents:', error);
     }
   };
 
+  // Fetch streams from the backend
   const fetchStreams = async () => {
     try {
       const res = await axios.get('/api/streams');
       setStreamList(res.data);
       if (res.data.length > 0 && !selectedStreamId) {
-        setSelectedStreamId(res.data[0].id);
+        // Convert to string for consistency in the select element
+        setSelectedStreamId(res.data[0].id.toString());
       }
     } catch (error) {
       console.error('Error fetching streams:', error);
     }
   };
 
-const handleAssign = async () => {
-  if (!selectedAgentId || !selectedStreamId) {
-    alert('Both Agent and Stream must be selected.');
-    return;
-  }
-  try {
-    const res = await axios.post('/api/assign', {
-      agent_id: selectedAgentId, // Use "agent_id" instead of "agentId"
-      stream_id: selectedStreamId, // Use "stream_id" instead of "streamId"
-    });
-    alert(res.data.message);
-    // Refresh the streams and agents list after assignment
-    fetchAgents();
-    fetchStreams();
-  } catch (err) {
-    alert(err.response?.data?.message || 'Assignment failed.');
-  }
-};
+  // Handle the assignment action
+  const handleAssign = async () => {
+    if (!selectedAgentId || !selectedStreamId) {
+      alert('Both Agent and Stream must be selected.');
+      return;
+    }
+    try {
+      // Convert selected IDs to numbers to match the model expectations
+      const agentIdNum = parseInt(selectedAgentId, 10);
+      const streamIdNum = parseInt(selectedStreamId, 10);
+
+      const res = await axios.post('/api/assign', {
+        agent_id: agentIdNum, // Using "agent_id"
+        stream_id: streamIdNum, // Using "stream_id"
+      });
+      alert(res.data.message);
+      // Refresh lists after assignment
+      fetchAgents();
+      fetchStreams();
+    } catch (err) {
+      alert(err.response?.data?.message || 'Assignment failed.');
+    }
+  };
 
   useEffect(() => {
     fetchAgents();
@@ -61,7 +70,9 @@ const handleAssign = async () => {
       <div className="form-container">
         <select value={selectedAgentId} onChange={(e) => setSelectedAgentId(e.target.value)}>
           {agentList.map((agent) => (
-            <option key={agent.id} value={agent.id}>{agent.username}</option>
+            <option key={agent.id} value={agent.id}>
+              {agent.username}
+            </option>
           ))}
         </select>
         <select value={selectedStreamId} onChange={(e) => setSelectedStreamId(e.target.value)}>

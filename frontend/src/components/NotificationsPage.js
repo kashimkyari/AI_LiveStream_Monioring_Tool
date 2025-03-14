@@ -2,51 +2,56 @@ import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 
 const NotificationsPage = () => {
+  // State variables for notifications and UI controls
   const [notifications, setNotifications] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [filter, setFilter] = useState('all');
   const [selectedNotification, setSelectedNotification] = useState(null);
 
+  // Fetch notifications on mount and poll every 30 seconds
   useEffect(() => {
     fetchNotifications();
-
-    // Set up polling for new notifications
     const interval = setInterval(fetchNotifications, 30000);
-
-    // Clean up on unmount
     return () => clearInterval(interval);
   }, [filter]);
 
+  // Fetch notifications from backend with applied filter
   const fetchNotifications = async () => {
     try {
       setLoading(true);
-      const res = await axios.get('/api/notifications');
-      const notifications = res.data.map(notification => {
+      const res = await axios.get(`/api/notifications?filter=${filter}`);
+      // Map notifications to ensure details have expected fields for object detections
+      const notificationsData = res.data.map(notification => {
         if (notification.type === 'object_detection' && notification.details) {
           return {
             ...notification,
             details: {
               ...notification.details,
-              image: notification.details.image, // Include the annotated image
+              // Critical: We rely on backend-provided keys such as annotated_image,
+              // streamer_uid, streamer_name, assigned_agent, platform, detected_object, and detections.
+              annotated_image: notification.details.annotated_image,
               streamer_uid: notification.details.streamer_uid,
               streamer_name: notification.details.streamer_name,
               assigned_agent: notification.details.assigned_agent,
               platform: notification.details.platform,
+              detected_object: notification.details.detected_object,
+              detections: notification.details.detections,
             },
           };
         }
         return notification;
       });
-      setNotifications(notifications);
+      setNotifications(notificationsData);
       setLoading(false);
-    } catch (error) {
-      console.error('Error fetching notifications:', error);
+    } catch (err) {
+      console.error('Error fetching notifications:', err);
       setError('Failed to load notifications. Please try again.');
       setLoading(false);
     }
   };
 
+  // Mark a single notification as read
   const markAsRead = async (notificationId) => {
     try {
       await axios.put(`/api/notifications/${notificationId}/read`);
@@ -55,20 +60,22 @@ const NotificationsPage = () => {
           ? { ...notification, read: true }
           : notification
       ));
-    } catch (error) {
-      console.error('Error marking notification as read:', error);
+    } catch (err) {
+      console.error('Error marking notification as read:', err);
     }
   };
 
+  // Mark all notifications as read
   const markAllAsRead = async () => {
     try {
       await axios.put('/api/notifications/read-all');
       setNotifications(notifications.map(notification => ({ ...notification, read: true })));
-    } catch (error) {
-      console.error('Error marking all notifications as read:', error);
+    } catch (err) {
+      console.error('Error marking all notifications as read:', err);
     }
   };
 
+  // Delete a single notification and update state
   const deleteNotification = async (notificationId) => {
     try {
       await axios.delete(`/api/notifications/${notificationId}`);
@@ -76,21 +83,23 @@ const NotificationsPage = () => {
       if (selectedNotification && selectedNotification.id === notificationId) {
         setSelectedNotification(null);
       }
-    } catch (error) {
-      console.error('Error deleting notification:', error);
+    } catch (err) {
+      console.error('Error deleting notification:', err);
     }
   };
 
+  // Delete all notifications
   const deleteAllNotifications = async () => {
     try {
       await axios.delete('/api/notifications/delete-all');
       setNotifications([]);
       setSelectedNotification(null);
-    } catch (error) {
-      console.error('Error deleting all notifications:', error);
+    } catch (err) {
+      console.error('Error deleting all notifications:', err);
     }
   };
 
+  // Handle notification click: mark as read if necessary and display details
   const handleNotificationClick = (notification) => {
     if (!notification.read) {
       markAsRead(notification.id);
@@ -98,21 +107,21 @@ const NotificationsPage = () => {
     setSelectedNotification(notification);
   };
 
+  // Format the confidence score to percentage format
   const formatConfidence = (confidence) => {
     if (typeof confidence === 'number') {
       return `${(confidence * 100).toFixed(1)}%`;
-    } else if (typeof confidence === 'string' && confidence.endsWith('%')) {
-      return confidence;
     }
     return 'N/A';
   };
 
+  // Determine color for detection badge based on confidence level
   const getDetectionColor = (confidence) => {
-    const confidenceValue = parseFloat(confidence);
-    if (isNaN(confidenceValue)) return '#888';
-    if (confidenceValue >= 90) return '#ff4444';
-    if (confidenceValue >= 75) return '#ff8c00';
-    if (confidenceValue >= 50) return '#ffcc00';
+    // Ensure confidence is treated as a number; default to 0 if invalid
+    const confidenceValue = typeof confidence === 'number' ? confidence : 0;
+    if (confidenceValue >= 0.9) return '#ff4444';
+    if (confidenceValue >= 0.75) return '#ff8c00';
+    if (confidenceValue >= 0.5) return '#ffcc00';
     return '#28a745';
   };
 
@@ -182,14 +191,16 @@ const NotificationsPage = () => {
                 >
                   <div className="notification-indicator" style={{
                     backgroundColor: notification.type === 'object_detection'
-                      ? getDetectionColor(notification.details?.detections?.[0]?.score || '0%')
+                      ? getDetectionColor(notification.details?.detections?.[0]?.score)
                       : '#007bff'
                   }}></div>
                   <div className="notification-content">
                     <div className="notification-message">
                       {notification.type === 'object_detection'
                         ? `Detected ${notification.details?.detections?.length || 0} objects`
-                        : notification.message}
+                        : notification.type === 'video_notification'
+                          ? notification.details?.message || 'Video event occurred'
+                          : notification.message}
                     </div>
                     <div className="notification-meta">
                       <span className="notification-time">
@@ -197,7 +208,7 @@ const NotificationsPage = () => {
                       </span>
                       {notification.type === 'object_detection' && (
                         <span className="notification-confidence">
-                          {formatConfidence(notification.details?.detections?.[0]?.score || 0)}
+                          {formatConfidence(notification.details?.detections?.[0]?.score)}
                         </span>
                       )}
                     </div>
@@ -212,7 +223,11 @@ const NotificationsPage = () => {
           {selectedNotification ? (
             <div className="notification-detail">
               <div className="detail-header">
-                <h3>Detection Details</h3>
+                <h3>
+                  {selectedNotification.type === 'video_notification'
+                    ? 'Video Notification Details'
+                    : 'Detection Details'}
+                </h3>
                 <div className="detail-actions">
                   {!selectedNotification.read && (
                     <button
@@ -235,46 +250,64 @@ const NotificationsPage = () => {
                 Detected at: {new Date(selectedNotification.timestamp).toLocaleString()}
               </div>
 
-              <div className="detection-content">
-                <div className="detection-image-container">
-                  {selectedNotification.details?.image && (
-                    <img
-                      src={selectedNotification.details.image}
-                      alt="Detection"
-                      className="detection-image"
-                    />
+              {selectedNotification.type === 'video_notification' ? (
+                <div className="video-notification-content">
+                  <p>{selectedNotification.details?.message || 'Video event occurred'}</p>
+                  {selectedNotification.details?.stream && (
+                    <div className="info-item">
+                      <span className="info-label">Stream:</span>
+                      <span className="info-value">{selectedNotification.details.stream}</span>
+                    </div>
                   )}
                 </div>
+              ) : (
+                <div className="detection-content">
+                  <div className="detection-image-container">
+                    {selectedNotification.details?.annotated_image && (
+                      <img
+                        src={selectedNotification.details.annotated_image}
+                        alt="Detection"
+                        className="detection-image"
+                      />
+                    )}
+                  </div>
 
-                <div className="detection-info">
-                  <div className="info-item">
-                    <span className="info-label">Streamer UID:</span>
-                    <span className="info-value">{selectedNotification.details?.streamer_uid}</span>
-                  </div>
-                  <div className="info-item">
-                    <span className="info-label">Streamer Name:</span>
-                    <span className="info-value">{selectedNotification.details?.streamer_name}</span>
-                  </div>
-                  <div className="info-item">
-                    <span className="info-label">Assigned Agent:</span>
-                    <span className="info-value">{selectedNotification.details?.assigned_agent}</span>
-                  </div>
-                  <div className="info-item">
-                    <span className="info-label">Platform:</span>
-                    <span className="info-value">{selectedNotification.details?.platform}</span>
-                  </div>
-                  <div className="info-item">
-                    <span className="info-label">Detected Objects:</span>
-                    <span className="info-value">
-                      {selectedNotification.details?.detections?.map((detection, index) => (
-                        <div key={index}>
-                          {detection.class} ({(detection.score * 100).toFixed(1)}%)
-                        </div>
-                      ))}
-                    </span>
+                  <div className="detection-info">
+                    <div className="info-item">
+                      <span className="info-label">Streamer UID:</span>
+                      <span className="info-value">{selectedNotification.details?.streamer_uid}</span>
+                    </div>
+                    <div className="info-item">
+                      <span className="info-label">Streamer Name:</span>
+                      <span className="info-value">{selectedNotification.details?.streamer_name}</span>
+                    </div>
+                    <div className="info-item">
+                      <span className="info-label">Assigned Agent:</span>
+                      <span className="info-value">{selectedNotification.details?.assigned_agent}</span>
+                    </div>
+                    <div className="info-item">
+                      <span className="info-label">Platform:</span>
+                      <span className="info-value">{selectedNotification.details?.platform}</span>
+                    </div>
+                    {selectedNotification.details?.detected_object && (
+                      <div className="info-item">
+                        <span className="info-label">Detected Object:</span>
+                        <span className="info-value">{selectedNotification.details.detected_object}</span>
+                      </div>
+                    )}
+                    <div className="info-item">
+                      <span className="info-label">Detected Objects:</span>
+                      <span className="info-value">
+                        {selectedNotification.details?.detections?.map((detection, index) => (
+                          <div key={index}>
+                            {detection.class} ({(detection.score * 100).toFixed(1)}%)
+                          </div>
+                        ))}
+                      </span>
+                    </div>
                   </div>
                 </div>
-              </div>
+              )}
 
               <div className="detail-actions-bottom">
                 <button className="action-btn" onClick={() => setSelectedNotification(null)}>

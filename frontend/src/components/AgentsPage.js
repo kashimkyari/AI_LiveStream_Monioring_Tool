@@ -137,7 +137,7 @@ const AgentsPage = () => {
       {showAgentModal && (
         <div className="modal-overlay" onClick={() => setShowAgentModal(false)}>
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-            <button className="close-button" onClick={() => setShowAgentModal(false)}>X</button>
+            <button className="close-button" onClick={() => setShowAgentModal(false)}>×</button>
             <h3>Create New Agent</h3>
             <div className="form-container">
               <input
@@ -204,46 +204,27 @@ const AgentsPage = () => {
           border: 1px solid #2d2d2d;
         }
 
-        .form-container {
-          display: flex;
-          gap: 15px;
-          flex-wrap: wrap;
+        h3 {
           margin-bottom: 20px;
+          font-size: 1.75rem;
+          text-align: center;
         }
 
-        .form-container input, 
-        .form-container select {
-          padding: 12px 18px;
-          background: #2d2d2d;
-          border: 1px solid #3d3d3d;
-          border-radius: 8px;
-          flex: 1;
-          color: #e0e0e0;
-          transition: all 0.3s ease;
-          min-width: 200px;
-        }
-
-        .form-container input:focus, 
-        .form-container select:focus {
-          border-color: #007bff;
-          box-shadow: 0 0 10px rgba(0,123,255,0.3);
-          outline: none;
-        }
-
-        .form-container button {
+        .create-agent-btn {
+          display: block;
+          margin: 0 auto 20px;
           padding: 12px 24px;
-          background: linear-gradient(135deg, #007bff, #0056b3);
-          color: #fff;
+          background: linear-gradient(135deg, #28a745, #1e7e34);
+          color: white;
           border: none;
           border-radius: 8px;
           cursor: pointer;
-          transition: all 0.3s ease;
-          font-weight: 500;
+          transition: transform 0.3s ease, box-shadow 0.3s ease;
         }
 
-        .form-container button:hover {
+        .create-agent-btn:hover {
           transform: translateY(-2px);
-          box-shadow: 0 5px 15px rgba(0,123,255,0.3);
+          box-shadow: 0 5px 15px rgba(40,167,69,0.3);
         }
 
         table {
@@ -259,70 +240,31 @@ const AgentsPage = () => {
           padding: 14px;
           border: 1px solid #3d3d3d;
           color: #e0e0e0;
+          text-align: left;
         }
 
         table th {
-          background: #007bff20;
+          background: rgba(0,123,255,0.1);
           font-weight: 600;
         }
 
-        .error {
-          color: #ff4444;
-          background: #ff444410;
-          padding: 12px;
-          border-radius: 8px;
-          border: 1px solid #ff444430;
-          margin: 15px 0;
-          animation: shake 0.4s ease;
+        table td {
+          vertical-align: middle;
         }
 
-        .message {
-          color: #28a745;
-          background: #28a74510;
-          padding: 12px;
-          border-radius: 8px;
-          border: 1px solid #28a74530;
-          margin: 15px 0;
-        }
-
-        .create-agent-btn {
-          margin-bottom: 20px;
-          padding: 12px 24px;
-          background: linear-gradient(135deg, #28a745, #1e7e34);
-          color: white;
-          border: none;
-          border-radius: 8px;
-          cursor: pointer;
-          transition: all 0.3s ease;
-        }
-
-        .create-agent-btn:hover {
-          transform: translateY(-2px);
-          box-shadow: 0 5px 15px rgba(40,167,69,0.3);
-        }
-
-        button {
-          transition: all 0.3s ease;
-          border: none;
+        table button {
+          margin-right: 5px;
+          padding: 6px 12px;
           background: #007bff;
-          color: white;
-          padding: 8px 16px;
-          border-radius: 6px;
+          color: #fff;
+          border: none;
+          border-radius: 4px;
+          cursor: pointer;
+          transition: background 0.3s ease;
         }
 
-        button:hover {
-          filter: brightness(1.1);
-          transform: translateY(-2px);
-        }
-
-        button:active {
-          transform: translateY(1px);
-        }
-
-        @keyframes shake {
-          0%, 100% { transform: translateX(0); }
-          25% { transform: translateX(-8px); }
-          75% { transform: translateX(8px); }
+        table button:hover {
+          background: #0056b3;
         }
 
         .modal-overlay {
@@ -368,26 +310,77 @@ const AgentsPage = () => {
           height: 30px;
           cursor: pointer;
           font-weight: bold;
-          transition: all 0.3s ease;
+          transition: transform 0.3s ease;
         }
 
         .close-button:hover {
           transform: rotate(90deg) scale(1.1);
         }
 
-        .modal-content h3 {
-          margin-top: 0;
+        .form-container {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 15px;
           margin-bottom: 20px;
+        }
+
+        .form-container input {
+          flex: 1;
+          min-width: 200px;
+          padding: 12px 18px;
+          background: #2d2d2d;
+          border: 1px solid #3d3d3d;
+          border-radius: 8px;
           color: #e0e0e0;
+          transition: border-color 0.3s ease, box-shadow 0.3s ease;
         }
 
-        .modal-content .form-container {
-          flex-direction: column;
+        .form-container input:focus {
+          border-color: #007bff;
+          box-shadow: 0 0 10px rgba(0,123,255,0.3);
+          outline: none;
         }
 
-        .modal-content .form-container input {
+        .modal-content button {
           width: 100%;
-          margin-bottom: 10px;
+          padding: 12px;
+          background: linear-gradient(135deg, #007bff, #0056b3);
+          color: #fff;
+          border: none;
+          border-radius: 8px;
+          cursor: pointer;
+          transition: transform 0.3s ease, box-shadow 0.3s ease;
+          font-weight: 500;
+        }
+
+        .modal-content button:hover {
+          transform: translateY(-2px);
+          box-shadow: 0 5px 15px rgba(0,123,255,0.3);
+        }
+
+        .error {
+          color: #ff4444;
+          background: rgba(255, 68, 68, 0.1);
+          padding: 12px;
+          border-radius: 8px;
+          border: 1px solid rgba(255, 68, 68, 0.2);
+          margin: 15px 0;
+          animation: shake 0.4s ease;
+        }
+
+        .message {
+          color: #28a745;
+          background: rgba(40, 167, 69, 0.1);
+          padding: 12px;
+          border-radius: 8px;
+          border: 1px solid rgba(40, 167, 69, 0.2);
+          margin: 15px 0;
+        }
+
+        @keyframes shake {
+          0%, 100% { transform: translateX(0); }
+          25% { transform: translateX(-8px); }
+          75% { transform: translateX(8px); }
         }
 
         @media (max-width: 768px) {

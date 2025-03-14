@@ -21,6 +21,30 @@ from scraping import scrape_stripchat_data, scrape_chaturbate_data, run_scrape_j
 from detection import detect_frame, detect_chat, update_flagged_objects, refresh_keywords
 from monitoring import start_monitoring, start_notification_monitor
 
+# --------------------------------------------------------------------
+# New helper function to send notifications
+# --------------------------------------------------------------------
+def send_notifications(log_entry, detections=None):
+    """
+    Sends a telegram notification for the detection event.
+    This function uses the annotated image and a custom message.
+    """
+    if log_entry.event_type == "object_detection":
+        message = f"Detected {len(detections)} object(s) in stream {log_entry.room_url}."
+        annotated_image = log_entry.details.get("annotated_image")
+        if annotated_image:
+            # Send telegram notification using the provided annotated image and message.
+            send_chat_telegram_notification(annotated_image, message)
+        else:
+            # If no annotated image is provided, log the notification.
+            print("No annotated image provided for notification:", message)
+    elif log_entry.event_type == "video_notification":
+        message = log_entry.details.get("message", "Video event occurred")
+        send_chat_telegram_notification(None, message)
+
+# --------------------------------------------------------------------
+# Endpoints
+# --------------------------------------------------------------------
 @app.route("/api/detect-chat", methods=["POST"])
 def detect_chat_from_image():
     if "chat_image" not in request.files:
@@ -146,11 +170,12 @@ def delete_agent(agent_id):
 @login_required(role="admin")
 def get_streams():
     platform = request.args.get("platform", "").strip().lower()
-    
+    streamer = request.args.get("streamer", "").strip().lower()  # Filter by streamer
+
     if platform == "chaturbate":
-        streams = ChaturbateStream.query.all()
+        streams = ChaturbateStream.query.filter(ChaturbateStream.streamer_username.ilike(f"%{streamer}%")).all()
     elif platform == "stripchat":
-        streams = StripchatStream.query.all()
+        streams = StripchatStream.query.filter(StripchatStream.streamer_username.ilike(f"%{streamer}%")).all()
     else:
         streams = Stream.query.all()
 
@@ -176,8 +201,8 @@ def create_stream():
     if Stream.query.filter_by(room_url=room_url).first():
         return jsonify({"message": "Stream exists"}), 400
 
-    # Create stream based on platform
-    streamer = room_url.rstrip("/").split("/")[-1]
+    streamer_username = room_url.rstrip("/").split("/")[-1] 
+    # Create stream based on platform by scraping for the m3u8 URL
     if platform.lower() == "chaturbate":
         scraped_data = scrape_chaturbate_data(room_url)
         if not scraped_data:
@@ -185,9 +210,9 @@ def create_stream():
 
         stream = ChaturbateStream(
             room_url=room_url,
-            streamer_username=streamer,
+            streamer_username=streamer_username, 
             type="chaturbate",
-            m3u8_url=scraped_data["m3u8_url"],
+            chaturbate_m3u8_url=scraped_data["chaturbate_m3u8_url"],
         )
     elif platform.lower() == "stripchat":
         scraped_data = scrape_stripchat_data(room_url)
@@ -196,12 +221,9 @@ def create_stream():
 
         stream = StripchatStream(
             room_url=room_url,
-            streamer_username=streamer,
+            streamer_username=streamer_username, 
             type="stripchat",
-            streamer_uid=scraped_data["streamer_uid"],
-            edge_server_url=scraped_data["edge_server_url"],
-            blob_url=scraped_data.get("blob_url"),
-            static_thumbnail=scraped_data.get("static_thumbnail")
+            stripchat_m3u8_url=scraped_data["stripchat_m3u8_url"],
         )
     else:
         return jsonify({"message": "Invalid platform"}), 400
@@ -215,45 +237,33 @@ def create_stream():
     }), 201
 
 # --------------------------------------------------------------------
-# New endpoint: Dedicated add function for Chaturbate streams
+# New endpoint: Create Agent Assignment
 # --------------------------------------------------------------------
-@app.route("/api/streams/chaturbate", methods=["POST"])
+@app.route("/api/assign", methods=["POST"])
 @login_required(role="admin")
-def create_chaturbate_stream():
+def assign_agent_to_stream():
     """
-    Creates a new Chaturbate stream.
-    This endpoint specifically validates and handles Chaturbate streams.
+    Create a new assignment linking an agent to a stream.
+    
+    Expected JSON payload:
+    {
+        "agent_id": <agent_id>,
+        "stream_id": <stream_id>
+    }
     """
     data = request.get_json()
-    room_url = data.get("room_url", "").strip().lower()
-    
-    if not room_url:
-        return jsonify({"message": "Room URL required"}), 400
-
-    if "chaturbate.com/" not in room_url:
-        return jsonify({"message": "Invalid Chaturbate URL"}), 400
-
-    if Stream.query.filter_by(room_url=room_url).first():
-        return jsonify({"message": "Stream exists"}), 400
-
-    streamer = room_url.rstrip("/").split("/")[-1]
-    scraped_data = scrape_chaturbate_data(room_url)
-    if not scraped_data:
-        return jsonify({"message": "Failed to scrape Chaturbate details"}), 500
-
-    stream = ChaturbateStream(
-        room_url=room_url,
-        streamer_username=streamer,
-        type="chaturbate",
-        m3u8_url=scraped_data["m3u8_url"],
-    )
-    db.session.add(stream)
-    db.session.commit()
-
-    return jsonify({
-        "message": "Chaturbate stream created",
-        "stream": stream.serialize()
-    }), 201
+    agent_id = data.get("agent_id")
+    stream_id = data.get("stream_id")
+    if not agent_id or not stream_id:
+        return jsonify({"message": "Both agent_id and stream_id are required."}), 400
+    try:
+        assignment = Assignment(agent_id=agent_id, stream_id=stream_id)
+        db.session.add(assignment)
+        db.session.commit()
+        return jsonify({"message": "Assignment created successfully."}), 201
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"message": "Assignment creation failed", "error": str(e)}), 500
 
 @app.route("/api/streams/<int:stream_id>", methods=["PUT"])
 @login_required(role="admin")
@@ -273,16 +283,13 @@ def update_stream(stream_id):
         if stream.type.lower() == "stripchat":
             scraped_data = scrape_stripchat_data(new_url)
             if scraped_data:
-                stream.streamer_uid = scraped_data["streamer_uid"]
-                stream.edge_server_url = scraped_data["edge_server_url"]
-                stream.blob_url = scraped_data.get("blob_url")
-                stream.static_thumbnail = scraped_data.get("static_thumbnail")
+                stream.stripchat_m3u8_url = scraped_data["stripchat_m3u8_url"]
             else:
                 return jsonify({"message": "Failed to scrape Stripchat details for updated URL"}), 500
         elif stream.type.lower() == "chaturbate":
             scraped_data = scrape_chaturbate_data(new_url)
             if scraped_data:
-                stream.m3u8_url = scraped_data["m3u8_url"]
+                stream.chaturbate_m3u8_url = scraped_data["chaturbate_m3u8_url"]
             else:
                 return jsonify({"message": "Failed to scrape Chaturbate details for updated URL"}), 500
     if "platform" in data:
@@ -576,17 +583,27 @@ def notification_events():
         while True:
             try:
                 cutoff = datetime.utcnow() - timedelta(seconds=30)
+                # Updated filter: include both object_detection and video_notification events
                 logs = Log.query.filter(
                     Log.timestamp >= cutoff,
-                    Log.event_type == "object_detection"
+                    Log.event_type.in_(["object_detection", "video_notification"])
                 ).order_by(Log.timestamp.desc()).all()
                 for log in logs:
-                    for det in log.details.get("detections", []):
+                    if log.event_type == "object_detection":
+                        for det in log.details.get("detections", []):
+                            payload = {
+                                "type": "detection",
+                                "stream": log.room_url,
+                                "object": det.get("class", "object"),
+                                "confidence": det.get("confidence", 0),
+                                "id": log.id,
+                            }
+                            yield "data: " + json.dumps(payload) + "\n\n"
+                    elif log.event_type == "video_notification":
                         payload = {
-                            "type": "detection",
+                            "type": "video",
                             "stream": log.room_url,
-                            "object": det.get("class", "object"),
-                            "confidence": det.get("confidence", 0),
+                            "message": log.details.get("message", "Video event occurred"),
                             "id": log.id,
                         }
                         yield "data: " + json.dumps(payload) + "\n\n"
@@ -617,68 +634,69 @@ def get_livestream():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-@app.route("/api/stream-detection", methods=["GET"])
-def get_stream_detections():
-    """
-    Returns detected objects for ongoing streams.
-    """
+# --------------------------------------------------------------------
+# Updated /api/detect-objects endpoint with error fixes
+# --------------------------------------------------------------------
+@app.route("/api/detect-objects", methods=["POST"])
+@login_required()
+def detect_objects():
     try:
-        cutoff = datetime.utcnow() - timedelta(seconds=10)  # Fetch recent detections
-        logs = Log.query.filter(Log.timestamp >= cutoff, Log.event_type == "object_detection").all()
+        data = request.get_json()
+        stream_url = data.get("stream_url")
+        detections = data.get("detections")
+        timestamp = data.get("timestamp")
+        annotated_image = data.get("annotated_image")
+        streamer_name = data.get("streamer_name")
+        platform = data.get("platform")
+        assigned_agent = data.get("assigned_agent")
+        detected_object = data.get("detected_object")
 
-        detections = []
-        for log in logs:
-            detections.append({
-                "stream_url": log.room_url,
-                "detections": log.details.get("detections", []),
-                "image_url": log.details.get("image_url", ""),
-                "timestamp": log.timestamp.isoformat(),
-            })
+        if not stream_url or not detections:
+            return jsonify({"message": "Missing required fields"}), 400
 
-        return jsonify({"detections": detections})
+        # Check if a similar detection has already been logged in the last 5 minutes, if detected_object is provided.
+        cutoff = datetime.utcnow() - timedelta(minutes=5)
+        existing_detection = None
+        if detected_object:
+            existing_detection = Log.query.filter(
+                Log.room_url == stream_url,
+                Log.event_type == "object_detection",
+                Log.timestamp >= cutoff,
+                Log.details.contains({"detected_object": detected_object})
+            ).first()
 
+        if existing_detection:
+            return jsonify({"message": "Duplicate detection skipped"}), 200
+
+        log_entry = Log(
+            room_url=stream_url,
+            event_type="object_detection",
+            details={
+                "detections": detections,
+                "annotated_image": annotated_image,
+                "timestamp": timestamp,
+                "streamer_name": streamer_name,
+                "platform": platform,
+                "assigned_agent": assigned_agent,
+                "detected_object": detected_object,
+            }
+        )
+        db.session.add(log_entry)
+        db.session.commit()
+
+        send_notifications(log_entry, detections)
+
+        return jsonify({"message": "Detection logged successfully"}), 201
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"message": "Error logging detection", "error": str(e)}), 500
 
-@app.route("/api/assign", methods=["POST"])
-@login_required(role="admin")
-def assign_agent_to_stream():
-    data = request.get_json()
-    agent_id = data.get("agent_id")
-    stream_id = data.get("stream_id")
-
-    if not agent_id or not stream_id:
-        return jsonify({"message": "Agent ID and Stream ID are required"}), 400
-
-    # Check if the agent exists
-    agent = User.query.filter_by(id=agent_id, role="agent").first()
-    if not agent:
-        return jsonify({"message": "Agent not found"}), 404
-
-    # Check if the stream exists
-    stream = Stream.query.get(stream_id)
-    if not stream:
-        return jsonify({"message": "Stream not found"}), 404
-
-    # Check if the stream is already assigned to another agent
-    existing_assignment = Assignment.query.filter_by(stream_id=stream_id).first()
-    if existing_assignment:
-        return jsonify({"message": "Stream is already assigned to another agent"}), 400
-
-    # Create a new assignment
-    assignment = Assignment(agent_id=agent_id, stream_id=stream_id)
-    db.session.add(assignment)
-    db.session.commit()
-
-    return jsonify({"message": "Agent assigned to stream successfully"}), 201
 
 @app.route("/api/notifications", methods=["GET"])
 @login_required()
 def get_notifications():
     filter_type = request.args.get('filter', 'all')
     
-    # Base query for detection logs
-    query = Log.query.filter(Log.event_type.in_(['object_detection', 'chat_detection']))
+    query = Log.query.filter(Log.event_type.in_(['object_detection', 'chat_detection', 'video_notification']))
     
     if filter_type == 'unread':
         query = query.filter_by(read=False)
@@ -686,14 +704,23 @@ def get_notifications():
         query = query.filter_by(event_type='object_detection')
     
     notifications = query.order_by(Log.timestamp.desc()).all()
-    return jsonify([{
-        "id": log.id,
-        "message": f"Detected {len(log.details.get('detections', []))} objects",
-        "timestamp": log.timestamp.isoformat(),
-        "read": log.read,
-        "type": log.event_type,
-        "details": log.details
-    } for log in notifications])
+    result = []
+    for log in notifications:
+        if log.event_type == 'video_notification':
+            message = log.details.get('message', 'Video event occurred')
+        elif log.event_type == 'chat_detection':
+            message = "Chat detection event"
+        else:
+            message = f"Detected {len(log.details.get('detections', []))} objects"
+        result.append({
+            "id": log.id,
+            "message": message,
+            "timestamp": log.timestamp.isoformat(),
+            "read": log.read,
+            "type": log.event_type,
+            "details": log.details
+        })
+    return jsonify(result)
 
 @app.route("/api/notifications/<int:notification_id>/read", methods=["PUT"])
 @login_required()
@@ -728,56 +755,3 @@ def delete_all_notifications():
     Log.query.filter(Log.event_type.in_(['object_detection', 'chat_detection'])).delete()
     db.session.commit()
     return jsonify({"message": "All notifications deleted"})
-
-@app.route("/api/detect-objects", methods=["POST"])
-@login_required()
-def detect_objects():
-    try:
-        data = request.get_json()
-        stream_url = data.get("stream_url")
-        detections = data.get("detections")
-        timestamp = data.get("timestamp")
-        annotated_image = data.get("annotated_image")
-        streamer_name = data.get("streamer_name")
-        platform = data.get("platform")
-        assigned_agent = data.get("assigned_agent")
-        detected_object = data.get("detected_object")
-
-        if not stream_url or not detections:
-            return jsonify({"message": "Missing required fields"}), 400
-
-        # Check if a similar detection has already been logged in the last 5 minutes
-        cutoff = datetime.utcnow() - timedelta(minutes=5)
-        existing_detection = Log.query.filter(
-            Log.room_url == stream_url,
-            Log.event_type == "object_detection",
-            Log.timestamp >= cutoff,
-            Log.details["detections"].astext.contains(detected_object)
-        ).first()
-
-        if existing_detection:
-            return jsonify({"message": "Duplicate detection skipped"}), 200
-
-        # Create a new log entry for the detection event
-        log_entry = Log(
-            room_url=stream_url,
-            event_type="object_detection",
-            details={
-                "detections": detections,
-                "annotated_image": annotated_image,
-                "timestamp": timestamp,
-                "streamer_name": streamer_name,
-                "platform": platform,
-                "assigned_agent": assigned_agent,
-                "detected_object": detected_object,
-            }
-        )
-        db.session.add(log_entry)
-        db.session.commit()
-
-        # Send notifications
-        send_notifications(log_entry, detections)
-
-        return jsonify({"message": "Detection logged successfully"}), 201
-    except Exception as e:
-        return jsonify({"message": "Error logging detection", "error": str(e)}), 500

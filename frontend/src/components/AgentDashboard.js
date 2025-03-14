@@ -1,19 +1,61 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
-import VideoPlayer from './VideoPlayer';
+import Hls from 'hls.js'; // HLS library for m3u8 streams
+
+// HLSPlayer component to play m3u8 streams directly.
+// Security Note: Ensure the stream URL is sanitized if sourced from user input.
+const HLSPlayer = ({ src, poster, alerts, className }) => {
+  const videoRef = useRef(null);
+
+  useEffect(() => {
+    let hls;
+    const video = videoRef.current;
+
+    if (video) {
+      if (Hls.isSupported()) {
+        hls = new Hls();
+        hls.loadSource(src);
+        hls.attachMedia(video);
+        hls.on(Hls.Events.ERROR, (event, data) => {
+          console.error('HLS error:', data);
+        });
+      } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+        // Native HLS support (e.g., Safari)
+        video.src = src;
+      } else {
+        console.error('HLS not supported in this browser');
+      }
+    }
+
+    return () => {
+      if (hls) {
+        hls.destroy();
+      }
+    };
+  }, [src]);
+
+  return (
+    <video 
+      ref={videoRef} 
+      controls 
+      poster={poster}
+      className={className}
+      style={{ width: '100%', height: 'auto', borderRadius: '4px' }}
+    />
+  );
+};
 
 const AgentDashboard = ({ onLogout }) => {
-  // State initialization for dashboard, logs, and UI controls.
+  // State for dashboard data, selected assignment, agent info, detection alerts, etc.
   const [dashboardData, setDashboardData] = useState({ ongoing_streams: 0, assignments: [] });
   const [selectedAssignment, setSelectedAssignment] = useState(null);
-  const [loading, setLoading] = useState(false);
   const [agentName, setAgentName] = useState('');
   const [detectionAlerts, setDetectionAlerts] = useState({});
   const [lastNotification, setLastNotification] = useState(0);
   const [objectDetectionActive, setObjectDetectionActive] = useState(false);
-  
+
   useEffect(() => {
-    // Fetch agent session information
+    // Fetch the agent session info.
     const fetchAgentName = async () => {
       try {
         const res = await axios.get('/api/session');
@@ -25,7 +67,7 @@ const AgentDashboard = ({ onLogout }) => {
       }
     };
 
-    // Fetch dashboard data (assigned streams and ongoing streams)
+    // Fetch dashboard data: assigned streams and ongoing streams.
     const fetchDashboard = async () => {
       try {
         const res = await axios.get('/api/agent/dashboard');
@@ -36,8 +78,7 @@ const AgentDashboard = ({ onLogout }) => {
       }
     };
 
- 
-    // Set up EventSource for real-time detection events
+    // Set up real-time detection alerts via EventSource.
     const eventSource = new EventSource('/api/detection-events');
     eventSource.onmessage = (e) => {
       const data = JSON.parse(e.data);
@@ -45,6 +86,17 @@ const AgentDashboard = ({ onLogout }) => {
         ...prev,
         [data.stream_url]: data.detections
       }));
+
+      // Trigger notifications (throttled to once per minute)
+      if (data.detections?.length > 0 && Date.now() - lastNotification > 60000) {
+        const detectedItems = data.detections.map(d => d.class).join(', ');
+        if (Notification.permission === 'granted') {
+          new Notification('Object Detected', {
+            body: `Detected ${detectedItems} in ${data.stream_url}`
+          });
+          setLastNotification(Date.now());
+        }
+      }
     };
 
     eventSource.onerror = (err) => {
@@ -52,7 +104,7 @@ const AgentDashboard = ({ onLogout }) => {
       eventSource.close();
     };
 
-    // Initialize object detection if not active
+    // Initialize object detection if not already active.
     const initObjectDetection = () => {
       if (!objectDetectionActive) {
         console.log('Initializing object detection...');
@@ -60,22 +112,20 @@ const AgentDashboard = ({ onLogout }) => {
       }
     };
 
-    // Initial API calls
+    // Initial API calls.
     fetchAgentName();
     fetchDashboard();
     initObjectDetection();
 
-    // Poll dashboard data every 10 seconds for updates
+    // Poll dashboard data every 10 seconds.
     const interval = setInterval(fetchDashboard, 10000);
     return () => {
       clearInterval(interval);
       eventSource.close();
     };
-  }, [objectDetectionActive]);
+  }, [objectDetectionActive, lastNotification]);
 
-
- 
-  // Close the modal view for a selected assignment
+  // Close the modal view.
   const closeModal = () => setSelectedAssignment(null);
 
   return (
@@ -91,13 +141,17 @@ const AgentDashboard = ({ onLogout }) => {
                   className="assignment-card" 
                   onClick={() => setSelectedAssignment(assignment)}
                 >
-                  <VideoPlayer 
-                    platform={assignment.platform.toLowerCase()}  // Same props as in admin panel
-                    streamerUid={assignment.streamer_uid}
-                    streamerName={assignment.streamer_username}
-                    alerts={detectionAlerts[assignment.room_url] || []}
-                    thumbnail={true}
+                  {/* HLSPlayer is used to preview the stream */}
+                  <HLSPlayer 
+                    src={assignment.stream_url}  // Expecting an m3u8 URL
+                    poster={assignment.static_thumbnail}
+                    className="video-preview"
                   />
+                  {detectionAlerts[assignment.room_url] && detectionAlerts[assignment.room_url].length > 0 && (
+                    <div className="detection-alert-badge">
+                      {detectionAlerts[assignment.room_url].length} DETECTIONS
+                    </div>
+                  )}
                   <div className="assignment-details">
                     <p><strong>{assignment.streamer_username}</strong></p>
                     <p><small>{assignment.platform}</small></p>
@@ -109,10 +163,6 @@ const AgentDashboard = ({ onLogout }) => {
             )}
           </div>
         </section>
-
-        
-
-       
       </div>
 
       {selectedAssignment && (
@@ -120,12 +170,10 @@ const AgentDashboard = ({ onLogout }) => {
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
             <button className="close-button" onClick={closeModal}>×</button>
             <h2>{selectedAssignment.streamer_username}'s Stream</h2>
-            <VideoPlayer 
-              platform={selectedAssignment.platform.toLowerCase()}
-              streamerUid={selectedAssignment.streamer_uid}
-              streamerName={selectedAssignment.streamer_username}
-              staticThumbnail={selectedAssignment.static_thumbnail}
-              alerts={detectionAlerts[selectedAssignment.room_url] || []}
+            <HLSPlayer 
+              src={selectedAssignment.stream_url} 
+              poster={selectedAssignment.static_thumbnail}
+              className="modal-video-player"
             />
             <div className="stream-info">
               <p><strong>Platform:</strong> {selectedAssignment.platform}</p>
@@ -135,8 +183,7 @@ const AgentDashboard = ({ onLogout }) => {
         </div>
       )}
 
-      <style>{`
-        /* Overall container and typography */
+      <style jsx>{`
         .agent-dashboard {
           min-height: 100vh;
           background: #121212;
@@ -144,8 +191,6 @@ const AgentDashboard = ({ onLogout }) => {
           font-family: 'Inter', sans-serif;
           animation: slideUp 0.6s cubic-bezier(0.22, 1, 0.36, 1);
         }
-
-        /* Main dashboard content */
         .dashboard-content {
           max-width: 900px;
           margin: 40px auto;
@@ -154,12 +199,9 @@ const AgentDashboard = ({ onLogout }) => {
           border-radius: 15px;
           box-shadow: 0 8px 30px rgba(0,0,0,0.5);
         }
-
         h2, h3 {
           margin-bottom: 1rem;
         }
-
-        /* Streams Section */
         .streams-section {
           margin-bottom: 2rem;
         }
@@ -175,6 +217,7 @@ const AgentDashboard = ({ onLogout }) => {
           border: 1px solid #3d3d3d;
           cursor: pointer;
           transition: transform 0.3s ease, box-shadow 0.3s ease;
+          position: relative;
         }
         .assignment-card:hover {
           transform: translateY(-5px);
@@ -186,85 +229,29 @@ const AgentDashboard = ({ onLogout }) => {
           background: #252525;
           text-align: center;
         }
-
-        /* Logs Section */
-        .logs-section {
-          background: #1a1a1a;
-          padding: 1.5rem;
-          border-radius: 12px;
-          margin-bottom: 2rem;
-        }
-        .filter-container input {
+        .video-preview {
           width: 100%;
-          padding: 0.8rem;
-          background: #2d2d2d;
-          border: 1px solid #3d3d3d;
-          border-radius: 8px;
-          color: #e0e0e0;
-          margin-bottom: 1rem;
-          transition: all 0.3s ease;
+          height: 150px;
+          object-fit: cover;
         }
-        .filter-container input:focus {
-          border-color: #007bff;
-          box-shadow: 0 0 10px rgba(0,123,255,0.3);
-          outline: none;
-        }
-        .logs-table {
-          width: 100%;
-          border-collapse: collapse;
-          background: #2d2d2d;
-          border-radius: 8px;
-          overflow: hidden;
-        }
-        .logs-table th, .logs-table td {
-          padding: 0.8rem;
-          border-bottom: 1px solid #3d3d3d;
-          text-align: left;
-        }
-        .logs-table th {
-          background: #007bff20;
-          font-weight: 600;
-        }
-        .details-button {
-          padding: 0.3rem 0.6rem;
-          font-size: 0.9rem;
-          background: #007bff;
-          border: none;
-          border-radius: 4px;
-          color: #fff;
-          cursor: pointer;
-          transition: background 0.3s ease;
-        }
-        .details-button:hover {
-          background: #0056b3;
-        }
-        .expanded-log {
-          background: #1a1a1a;
-        }
-        .log-details p {
-          margin: 0.3rem 0;
-        }
-        .loading, .no-logs {
-          text-align: center;
-          padding: 2rem;
-          color: #a0a0a0;
-        }
-
-        /* Object detection status */
-        .object-status {
-          text-align: center;
-          font-size: 1.1rem;
-          margin-top: 1.5rem;
-        }
-        .detection-active {
-          color: #28a745;
+        .detection-alert-badge {
+          position: absolute;
+          top: 10px;
+          right: 10px;
+          background: #ff4444;
+          color: white;
+          padding: 5px 10px;
+          border-radius: 15px;
+          font-size: 0.8rem;
           font-weight: bold;
+          animation: pulse 1s infinite;
+          z-index: 2;
         }
-        .detection-loading {
-          color: #ffc107;
+        @keyframes pulse {
+          0% { transform: scale(1); }
+          50% { transform: scale(1.05); }
+          100% { transform: scale(1); }
         }
-
-        /* Modal styles */
         .modal-overlay {
           position: fixed;
           top: 0;
@@ -280,8 +267,8 @@ const AgentDashboard = ({ onLogout }) => {
         }
         .modal-content {
           background: #2d2d2d;
-          padding: 1.5rem;
-          border-radius: 12px;
+          padding: 20px;
+          border-radius: 8px;
           max-width: 600px;
           width: 90%;
           position: relative;
@@ -289,21 +276,22 @@ const AgentDashboard = ({ onLogout }) => {
           border: 1px solid #3d3d3d;
           box-shadow: 0 15px 30px rgba(0,0,0,0.4);
         }
+        @keyframes zoomIn {
+          from { transform: scale(0.8); opacity: 0; }
+          to { transform: scale(1); opacity: 1; }
+        }
         .close-button {
           position: absolute;
-          top: 1rem;
-          right: 1rem;
+          top: 10px;
+          right: 10px;
           background: #ff4444;
           color: #fff;
           border: none;
           border-radius: 50%;
-          width: 32px;
-          height: 32px;
+          width: 30px;
+          height: 30px;
           cursor: pointer;
-          font-size: 1.2rem;
-          display: flex;
-          align-items: center;
-          justify-content: center;
+          font-weight: bold;
           transition: all 0.3s ease;
         }
         .close-button:hover {
@@ -315,18 +303,10 @@ const AgentDashboard = ({ onLogout }) => {
           background: #252525;
           border-radius: 8px;
         }
-
-        /* Animations */
         @keyframes slideUp {
           from { opacity: 0; transform: translateY(20px); }
           to { opacity: 1; transform: translateY(0); }
         }
-        @keyframes zoomIn {
-          from { transform: scale(0.8); opacity: 0; }
-          to { transform: scale(1); opacity: 1; }
-        }
-
-        /* Responsive adjustments */
         @media (max-width: 768px) {
           .dashboard-content {
             margin: 20px auto;
@@ -334,10 +314,6 @@ const AgentDashboard = ({ onLogout }) => {
           }
           .assignment-grid {
             grid-template-columns: 1fr;
-          }
-          .logs-table th, .logs-table td {
-            padding: 0.6rem;
-            font-size: 0.9em;
           }
           .modal-content {
             padding: 1rem;

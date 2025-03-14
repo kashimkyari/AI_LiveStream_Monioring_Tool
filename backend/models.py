@@ -2,6 +2,9 @@ from datetime import datetime
 from extensions import db
 
 class User(db.Model):
+    """
+    User model represents an application user, such as agents or administrators.
+    """
     __tablename__ = "users"
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False)
@@ -17,6 +20,7 @@ class User(db.Model):
     assignments = db.relationship('Assignment', back_populates='agent', lazy=True)
 
     def serialize(self):
+        """Serialize the User model into a dictionary."""
         return {
             "id": self.id,
             "username": self.username,
@@ -29,11 +33,15 @@ class User(db.Model):
         }
 
 class Stream(db.Model):
+    """
+    Stream model serves as a base class for different streaming platforms.
+    It uses polymorphic identity to distinguish between Chaturbate and Stripchat streams.
+    """
     __tablename__ = "streams"
     id = db.Column(db.Integer, primary_key=True)
     room_url = db.Column(db.String(300), unique=True, nullable=False)
     streamer_username = db.Column(db.String(100))
-    type = db.Column(db.String(50))  # Discriminator column
+    type = db.Column(db.String(50))  # Discriminator column for polymorphic identity
 
     # Relationship with Assignment
     assignments = db.relationship('Assignment', back_populates='stream', lazy=True)
@@ -44,6 +52,7 @@ class Stream(db.Model):
     }
 
     def serialize(self):
+        """Serialize the Stream model into a dictionary."""
         return {
             "id": self.id,
             "room_url": self.room_url,
@@ -52,46 +61,53 @@ class Stream(db.Model):
         }
 
 class ChaturbateStream(Stream):
+    """
+    ChaturbateStream model extends Stream for Chaturbate-specific streams.
+    Stores the m3u8 URL for Chaturbate.
+    """
     __tablename__ = "chaturbate_streams"
     id = db.Column(db.Integer, db.ForeignKey("streams.id"), primary_key=True)
-    m3u8_url = db.Column(db.String(300), nullable=True)
+    chaturbate_m3u8_url = db.Column(db.String(300), nullable=True)
 
     __mapper_args__ = {
         'polymorphic_identity': 'chaturbate'
     }
 
     def serialize(self):
+        """Serialize the ChaturbateStream model into a dictionary."""
         data = super().serialize()
         data.update({
             "platform": "Chaturbate",
-            "m3u8_url": self.m3u8_url,
+            "chaturbate_m3u8_url": self.chaturbate_m3u8_url,
         })
         return data
 
 class StripchatStream(Stream):
+    """
+    StripchatStream model extends Stream for Stripchat-specific streams.
+    Stores the m3u8 URL for Stripchat.
+    """
     __tablename__ = "stripchat_streams"
     id = db.Column(db.Integer, db.ForeignKey("streams.id"), primary_key=True)
-    streamer_uid = db.Column(db.String(50), nullable=True)
-    edge_server_url = db.Column(db.String(300), nullable=True)
-    blob_url = db.Column(db.String(300), nullable=True)
-    static_thumbnail = db.Column(db.String(300), nullable=True)
+    stripchat_m3u8_url = db.Column(db.String(300), nullable=True)
 
     __mapper_args__ = {
         'polymorphic_identity': 'stripchat'
     }
 
     def serialize(self):
+        """Serialize the StripchatStream model into a dictionary."""
         data = super().serialize()
         data.update({
             "platform": "Stripchat",
-            "streamer_uid": self.streamer_uid,
-            "edge_server_url": self.edge_server_url,
-            "blob_url": self.blob_url,
-            "static_thumbnail": self.static_thumbnail,
+            "stripchat_m3u8_url": self.stripchat_m3u8_url,
         })
         return data
 
 class Assignment(db.Model):
+    """
+    Assignment model links a User (agent) with a Stream.
+    """
     __tablename__ = "assignments"
     id = db.Column(db.Integer, primary_key=True)
     agent_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
@@ -103,6 +119,7 @@ class Assignment(db.Model):
     stream = db.relationship('Stream', back_populates='assignments')
 
     def serialize(self):
+        """Serialize the Assignment model into a dictionary."""
         return {
             "id": self.id,
             "agent_id": self.agent_id,
@@ -111,15 +128,19 @@ class Assignment(db.Model):
         }
 
 class Log(db.Model):
+    """
+    Log model records events such as detections, video notifications, and chat events.
+    """
     __tablename__ = "logs"
     id = db.Column(db.Integer, primary_key=True)
     timestamp = db.Column(db.DateTime(timezone=True), default=datetime.utcnow)
     room_url = db.Column(db.String(300))
     event_type = db.Column(db.String(50))
-    details = db.Column(db.JSON)  # Ensure this can store detection details and images
+    details = db.Column(db.JSON)  # Stores detection details, images, etc.
     read = db.Column(db.Boolean, default=False)
 
     def serialize(self):
+        """Serialize the Log model into a dictionary."""
         return {
             "id": self.id,
             "timestamp": self.timestamp.isoformat(),
@@ -128,22 +149,31 @@ class Log(db.Model):
             "details": self.details,
             "read": self.read,
         }
-        
+
 class ChatKeyword(db.Model):
+    """
+    ChatKeyword model stores keywords for flagging chat messages.
+    """
     __tablename__ = "chat_keywords"
     id = db.Column(db.Integer, primary_key=True)
     keyword = db.Column(db.String(100), unique=True, nullable=False)
 
     def serialize(self):
+        """Serialize the ChatKeyword model into a dictionary."""
         return {"id": self.id, "keyword": self.keyword}
 
 class FlaggedObject(db.Model):
+    """
+    FlaggedObject model stores objects to be flagged during detection,
+    along with their confidence thresholds.
+    """
     __tablename__ = "flagged_objects"
     id = db.Column(db.Integer, primary_key=True)
     object_name = db.Column(db.String(100), unique=True, nullable=False)
     confidence_threshold = db.Column(db.Numeric(3, 2), default=0.8)
 
     def serialize(self):
+        """Serialize the FlaggedObject model into a dictionary."""
         return {
             "id": self.id,
             "object_name": self.object_name,
@@ -151,12 +181,16 @@ class FlaggedObject(db.Model):
         }
 
 class TelegramRecipient(db.Model):
+    """
+    TelegramRecipient model stores Telegram user information for notifications.
+    """
     __tablename__ = "telegram_recipients"
     id = db.Column(db.Integer, primary_key=True)
     telegram_username = db.Column(db.String(50), unique=True, nullable=False)
     chat_id = db.Column(db.String(50), nullable=False)
 
     def serialize(self):
+        """Serialize the TelegramRecipient model into a dictionary."""
         return {
             "id": self.id,
             "telegram_username": self.telegram_username,
