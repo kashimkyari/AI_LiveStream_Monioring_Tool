@@ -4,8 +4,7 @@ import Login from './components/Login';
 import AdminPanel from './components/AdminPanel';
 import AgentDashboard from './components/AgentDashboard';
 import VideoPlayer from './components/VideoPlayer';
-import HLSTester from './components/HLSTester';
-
+import NotificationsPage from './components/NotificationsPage';
 
 function App() {
   const [role, setRole] = useState(null);
@@ -61,10 +60,12 @@ function App() {
 
         setNotifications(prev => [
           { 
-            id: data.id, 
+            id: Date.now().toString(), // Temporary ID for our notifications list
             message: notificationMessage,
-            timestamp: new Date().toLocaleString(),
+            timestamp: new Date().toISOString(),
             image: data.image_url,
+            type: 'detection',
+            read: false,
             details: {
               stream: stream?.id || 'N/A',
               agent: agentName,
@@ -108,8 +109,77 @@ function App() {
     setUnreadCount(0);
   };
 
-  return (
+  const markAsRead = async (notificationId) => {
+    try {
+      // In a real implementation, this would call the API
+      // await axios.put(`/api/notifications/${notificationId}`, { read: true });
+      
+      setNotifications(notifications.map(notification => 
+        notification.id === notificationId 
+          ? { ...notification, read: true }
+          : notification
+      ));
+    } catch (error) {
+      console.error('Error marking notification as read:', error);
+    }
+  };
 
+  const markAllAsRead = async () => {
+    try {
+      // In a real implementation, this would call the API
+      // await axios.put('/api/notifications/read-all');
+      
+      setNotifications(notifications.map(notification => ({ ...notification, read: true })));
+      setUnreadCount(0);
+    } catch (error) {
+      console.error('Error marking all notifications as read:', error);
+    }
+  };
+
+  const deleteNotification = async (notificationId) => {
+    try {
+      // In a real implementation, this would call the API
+      // await axios.delete(`/api/notifications/${notificationId}`);
+      
+      setNotifications(notifications.filter(notification => notification.id !== notificationId));
+    } catch (error) {
+      console.error('Error deleting notification:', error);
+    }
+  };
+
+  const deleteAllNotifications = async () => {
+    try {
+      // In a real implementation, this would call the API
+      // await axios.delete('/api/notifications/delete-all');
+      
+      setNotifications([]);
+      setUnreadCount(0);
+    } catch (error) {
+      console.error('Error deleting all notifications:', error);
+    }
+  };
+
+  const fetchNotifications = async (filter = 'all') => {
+    try {
+      // Normally this would be an API call, but we'll use our local state
+      // In a real implementation: const res = await axios.get(`/api/notifications?filter=${filter}`);
+      
+      if (filter === 'all') {
+        return notifications;
+      } else if (filter === 'unread') {
+        return notifications.filter(n => !n.read);
+      } else if (filter === 'detection') {
+        return notifications.filter(n => n.type === 'detection');
+      }
+      
+      return notifications;
+    } catch (error) {
+      console.error('Error fetching notifications:', error);
+      return [];
+    }
+  };
+
+  return (
     <div className="app-container">
       {role && (
         <header className="app-header">
@@ -128,12 +198,7 @@ function App() {
                   Notifications
                   {unreadCount > 0 && <span className="notification-badge">{unreadCount}</span>}
                 </button>
-                <button 
-  onClick={() => setActiveTab('hls-tester')} 
-  className={activeTab === 'hls-tester' ? 'active' : ''}
->
-  HLS Tester
-</button>
+                
               </nav>
             )}
             <button className="logout-button" onClick={handleLogout}>Logout</button>
@@ -143,41 +208,17 @@ function App() {
       
       <div className="main-content">
         {!role && <Login onLogin={handleLogin} />}
-        {role === 'admin' && activeTab !== 'notifications' && <AdminPanel activeTab={activeTab} />}
+        {role === 'admin' && activeTab !== 'notifications' && activeTab !== 'hls-tester' && <AdminPanel activeTab={activeTab} />}
         {role === 'agent' && <AgentDashboard />}
-        {role === 'admin' && activeTab === 'hls-tester' && <HLSTester />}
         {role === 'admin' && activeTab === 'notifications' && (
-          <div className="notifications-tab">
-            <h2>Notifications</h2>
-            {notifications.length === 0 ? (
-              <p>No notifications yet.</p>
-            ) : (
-              <div className="notifications-list">
-                {notifications.map(note => (
-                  <div key={note.id} className="notification-item">
-                    <div className="notification-header">
-                      <div className="notification-message">{note.message}</div>
-                      <div className="notification-timestamp">{note.timestamp}</div>
-                    </div>
-                    {note.image && (
-                      <img 
-                        src={note.image} 
-                        alt="Detection" 
-                        className="notification-image"
-                      />
-                    )}
-                    <div className="notification-details">
-                      {Object.entries(note.details).map(([key, value]) => (
-                        <div key={key} className="detail-item">
-                          <strong>{key}:</strong> {value}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+          <NotificationsPage 
+            notifications={notifications}
+            fetchNotifications={fetchNotifications}
+            markAsRead={markAsRead}
+            markAllAsRead={markAllAsRead}
+            deleteNotification={deleteNotification}
+            deleteAllNotifications={deleteAllNotifications}
+          />
         )}
       </div>
 
@@ -300,6 +341,12 @@ function App() {
           animation: pulse 1.5s infinite;
         }
 
+        @keyframes pulse {
+          0% { transform: scale(1); }
+          50% { transform: scale(1.1); }
+          100% { transform: scale(1); }
+        }
+
         .logout-button {
           padding: 12px 24px;
           background: linear-gradient(135deg, #007bff, #0056b3);
@@ -317,57 +364,9 @@ function App() {
         }
 
         .main-content {
-          max-width: 900px;
+          max-width: 1200px;
           margin: 40px auto;
           padding: 0 20px;
-        }
-
-        .notifications-tab {
-          padding: 20px;
-          background: #1a1a1a;
-          border-radius: 8px;
-          margin-top: 20px;
-        }
-
-        .notifications-list {
-          max-height: 60vh;
-          overflow-y: auto;
-        }
-
-        .notification-item {
-          padding: 12px;
-          margin-bottom: 8px;
-          background: #252525;
-          border-radius: 8px;
-          border-left: 4px solid #007bff;
-        }
-
-        .notification-header {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          margin-bottom: 8px;
-        }
-
-        .notification-timestamp {
-          font-size: 0.8em;
-          color: #888;
-        }
-
-        .notification-image {
-          width: 100%;
-          max-width: 200px;
-          margin-top: 8px;
-          border-radius: 4px;
-        }
-
-        .notification-details {
-          margin-top: 8px;
-          font-size: 0.9em;
-        }
-
-        .detail-item {
-          margin: 4px 0;
         }
 
         .toast {
@@ -425,12 +424,6 @@ function App() {
           to { width: 0%; }
         }
 
-        @keyframes pulse {
-          0% { transform: scale(1); }
-          50% { transform: scale(1.1); }
-          100% { transform: scale(1); }
-        }
-
         @media (max-width: 768px) {
           .app-header {
             padding: 15px;
@@ -464,4 +457,5 @@ function App() {
     </div>
   );
 }
+
 export default App;

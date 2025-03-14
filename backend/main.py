@@ -15,7 +15,7 @@ with app.app_context():
             email="admin@example.com",
             firstname="Admin",
             lastname="User",
-            phonenumber="000-000-0000",
+            phonenumber="+2348135964992",
             role="admin",
         )
         db.session.add(admin)

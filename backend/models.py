@@ -54,6 +54,7 @@ class Stream(db.Model):
 class ChaturbateStream(Stream):
     __tablename__ = "chaturbate_streams"
     id = db.Column(db.Integer, db.ForeignKey("streams.id"), primary_key=True)
+    m3u8_url = db.Column(db.String(300), nullable=True)
 
     __mapper_args__ = {
         'polymorphic_identity': 'chaturbate'
@@ -61,7 +62,10 @@ class ChaturbateStream(Stream):
 
     def serialize(self):
         data = super().serialize()
-        data["platform"] = "Chaturbate"
+        data.update({
+            "platform": "Chaturbate",
+            "m3u8_url": self.m3u8_url,
+        })
         return data
 
 class StripchatStream(Stream):
@@ -112,7 +116,8 @@ class Log(db.Model):
     timestamp = db.Column(db.DateTime(timezone=True), default=datetime.utcnow)
     room_url = db.Column(db.String(300))
     event_type = db.Column(db.String(50))
-    details = db.Column(db.JSON)
+    details = db.Column(db.JSON)  # Ensure this can store detection details and images
+    read = db.Column(db.Boolean, default=False)
 
     def serialize(self):
         return {
@@ -121,8 +126,9 @@ class Log(db.Model):
             "room_url": self.room_url,
             "event_type": self.event_type,
             "details": self.details,
+            "read": self.read,
         }
-
+        
 class ChatKeyword(db.Model):
     __tablename__ = "chat_keywords"
     id = db.Column(db.Integer, primary_key=True)

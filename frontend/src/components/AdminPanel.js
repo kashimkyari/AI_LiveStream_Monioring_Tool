@@ -125,12 +125,7 @@ const AdminPanel = ({ activeTab }) => {
         </div>
       )}
 
-      {activeTab === 'visual' && (
-        <div className="tab-content">
-          <h3>Visual Test</h3>
-          <VisualTestPage />
-        </div>
-      )}
+     
 
       {selectedAssignment && (
         <div className="modal-overlay" onClick={closeModal}>

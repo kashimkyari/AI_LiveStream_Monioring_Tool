@@ -1,4 +1,3 @@
-# routes.py
 import os
 import time
 import json
@@ -15,13 +14,12 @@ import requests
 from flask import request, jsonify, session, send_from_directory, current_app
 from config import app
 from extensions import db
-from models import User, Stream, Assignment, Log, ChatKeyword, FlaggedObject, TelegramRecipient
+from models import User, Stream, Assignment, Log, ChatKeyword, FlaggedObject, TelegramRecipient, ChaturbateStream, StripchatStream
 from utils import allowed_file, login_required
 from notifications import send_chat_telegram_notification
-from scraping import scrape_stripchat_data, run_scrape_job, scrape_jobs
+from scraping import scrape_stripchat_data, scrape_chaturbate_data, run_scrape_job, scrape_jobs
 from detection import detect_frame, detect_chat, update_flagged_objects, refresh_keywords
 from monitoring import start_monitoring, start_notification_monitor
-from models import Stream, ChaturbateStream, StripchatStream
 
 @app.route("/api/detect-chat", methods=["POST"])
 def detect_chat_from_image():
@@ -181,10 +179,15 @@ def create_stream():
     # Create stream based on platform
     streamer = room_url.rstrip("/").split("/")[-1]
     if platform.lower() == "chaturbate":
+        scraped_data = scrape_chaturbate_data(room_url)
+        if not scraped_data:
+            return jsonify({"message": "Failed to scrape Chaturbate details"}), 500
+
         stream = ChaturbateStream(
             room_url=room_url,
             streamer_username=streamer,
-            type="chaturbate"
+            type="chaturbate",
+            m3u8_url=scraped_data["m3u8_url"],
         )
     elif platform.lower() == "stripchat":
         scraped_data = scrape_stripchat_data(room_url)
@@ -208,6 +211,47 @@ def create_stream():
 
     return jsonify({
         "message": "Stream created",
+        "stream": stream.serialize()
+    }), 201
+
+# --------------------------------------------------------------------
+# New endpoint: Dedicated add function for Chaturbate streams
+# --------------------------------------------------------------------
+@app.route("/api/streams/chaturbate", methods=["POST"])
+@login_required(role="admin")
+def create_chaturbate_stream():
+    """
+    Creates a new Chaturbate stream.
+    This endpoint specifically validates and handles Chaturbate streams.
+    """
+    data = request.get_json()
+    room_url = data.get("room_url", "").strip().lower()
+    
+    if not room_url:
+        return jsonify({"message": "Room URL required"}), 400
+
+    if "chaturbate.com/" not in room_url:
+        return jsonify({"message": "Invalid Chaturbate URL"}), 400
+
+    if Stream.query.filter_by(room_url=room_url).first():
+        return jsonify({"message": "Stream exists"}), 400
+
+    streamer = room_url.rstrip("/").split("/")[-1]
+    scraped_data = scrape_chaturbate_data(room_url)
+    if not scraped_data:
+        return jsonify({"message": "Failed to scrape Chaturbate details"}), 500
+
+    stream = ChaturbateStream(
+        room_url=room_url,
+        streamer_username=streamer,
+        type="chaturbate",
+        m3u8_url=scraped_data["m3u8_url"],
+    )
+    db.session.add(stream)
+    db.session.commit()
+
+    return jsonify({
+        "message": "Chaturbate stream created",
         "stream": stream.serialize()
     }), 201
 
@@ -235,6 +279,12 @@ def update_stream(stream_id):
                 stream.static_thumbnail = scraped_data.get("static_thumbnail")
             else:
                 return jsonify({"message": "Failed to scrape Stripchat details for updated URL"}), 500
+        elif stream.type.lower() == "chaturbate":
+            scraped_data = scrape_chaturbate_data(new_url)
+            if scraped_data:
+                stream.m3u8_url = scraped_data["m3u8_url"]
+            else:
+                return jsonify({"message": "Failed to scrape Chaturbate details for updated URL"}), 500
     if "platform" in data:
         stream.type = data["platform"].strip().lower()
     db.session.commit()
@@ -502,32 +552,6 @@ def stream_visual():
 def serve_detection_image(filename):
     return send_from_directory("detections", filename)
 
-@app.route("/api/detection-events", methods=["GET"])
-def detection_events():
-    def generate():
-        import json
-        import time
-        while True:
-            try:
-                cutoff = datetime.utcnow() - timedelta(seconds=15)
-                logs = Log.query.filter(
-                    Log.timestamp >= cutoff,
-                    Log.event_type == "object_detection"
-                ).all()
-                stream_detections = defaultdict(list)
-                for log in logs:
-                    stream_detections[log.room_url].extend(log.details.get("detections", []))
-                for url, detections in stream_detections.items():
-                    payload = json.dumps({
-                        "stream_url": url,
-                        "detections": detections
-                    })
-                    yield f"data: {payload}\n\n"
-                time.sleep(2)
-            except Exception as e:
-                time.sleep(5)
-    return current_app.response_class(generate(), mimetype="text/event-stream")
-
 @app.route("/api/detect", methods=["POST"])
 def unified_detect():
     data = request.get_json()
@@ -543,21 +567,6 @@ def unified_detect():
         "chat": chat_results,
         "visual": visual_results
     })
-
-@app.route("/api/detect-objects", methods=["POST"])
-@login_required()
-def detect_objects():
-    """
-    Since object detection is now handled on the frontend with TensorFlow,
-    this endpoint returns an empty detections list.
-    """
-    try:
-        data = request.get_json()
-        if "image_data" not in data:
-            return jsonify({"error": "Missing image data"}), 400
-        return jsonify({"detections": []})
-    except Exception as e:
-        return jsonify({"error": "Processing failed"}), 500
 
 @app.route("/api/notification-events")
 def notification_events():
@@ -662,3 +671,113 @@ def assign_agent_to_stream():
     db.session.commit()
 
     return jsonify({"message": "Agent assigned to stream successfully"}), 201
+
+@app.route("/api/notifications", methods=["GET"])
+@login_required()
+def get_notifications():
+    filter_type = request.args.get('filter', 'all')
+    
+    # Base query for detection logs
+    query = Log.query.filter(Log.event_type.in_(['object_detection', 'chat_detection']))
+    
+    if filter_type == 'unread':
+        query = query.filter_by(read=False)
+    elif filter_type == 'detection':
+        query = query.filter_by(event_type='object_detection')
+    
+    notifications = query.order_by(Log.timestamp.desc()).all()
+    return jsonify([{
+        "id": log.id,
+        "message": f"Detected {len(log.details.get('detections', []))} objects",
+        "timestamp": log.timestamp.isoformat(),
+        "read": log.read,
+        "type": log.event_type,
+        "details": log.details
+    } for log in notifications])
+
+@app.route("/api/notifications/<int:notification_id>/read", methods=["PUT"])
+@login_required()
+def mark_notification_as_read(notification_id):
+    log = Log.query.get(notification_id)
+    if not log:
+        return jsonify({"message": "Notification not found"}), 404
+    log.read = True
+    db.session.commit()
+    return jsonify({"message": "Notification marked as read"})
+
+@app.route("/api/notifications/read-all", methods=["PUT"])
+@login_required()
+def mark_all_notifications_read():
+    Log.query.filter(Log.event_type.in_(['object_detection', 'chat_detection']), Log.read == False).update({'read': True})
+    db.session.commit()
+    return jsonify({"message": "All notifications marked as read"})
+
+@app.route("/api/notifications/<int:notification_id>", methods=["DELETE"])
+@login_required()
+def delete_notification(notification_id):
+    log = Log.query.get(notification_id)
+    if not log:
+        return jsonify({"message": "Notification not found"}), 404
+    db.session.delete(log)
+    db.session.commit()
+    return jsonify({"message": "Notification deleted"})
+
+@app.route("/api/notifications/delete-all", methods=["DELETE"])
+@login_required()
+def delete_all_notifications():
+    Log.query.filter(Log.event_type.in_(['object_detection', 'chat_detection'])).delete()
+    db.session.commit()
+    return jsonify({"message": "All notifications deleted"})
+
+@app.route("/api/detect-objects", methods=["POST"])
+@login_required()
+def detect_objects():
+    try:
+        data = request.get_json()
+        stream_url = data.get("stream_url")
+        detections = data.get("detections")
+        timestamp = data.get("timestamp")
+        annotated_image = data.get("annotated_image")
+        streamer_name = data.get("streamer_name")
+        platform = data.get("platform")
+        assigned_agent = data.get("assigned_agent")
+        detected_object = data.get("detected_object")
+
+        if not stream_url or not detections:
+            return jsonify({"message": "Missing required fields"}), 400
+
+        # Check if a similar detection has already been logged in the last 5 minutes
+        cutoff = datetime.utcnow() - timedelta(minutes=5)
+        existing_detection = Log.query.filter(
+            Log.room_url == stream_url,
+            Log.event_type == "object_detection",
+            Log.timestamp >= cutoff,
+            Log.details["detections"].astext.contains(detected_object)
+        ).first()
+
+        if existing_detection:
+            return jsonify({"message": "Duplicate detection skipped"}), 200
+
+        # Create a new log entry for the detection event
+        log_entry = Log(
+            room_url=stream_url,
+            event_type="object_detection",
+            details={
+                "detections": detections,
+                "annotated_image": annotated_image,
+                "timestamp": timestamp,
+                "streamer_name": streamer_name,
+                "platform": platform,
+                "assigned_agent": assigned_agent,
+                "detected_object": detected_object,
+            }
+        )
+        db.session.add(log_entry)
+        db.session.commit()
+
+        # Send notifications
+        send_notifications(log_entry, detections)
+
+        return jsonify({"message": "Detection logged successfully"}), 201
+    except Exception as e:
+        return jsonify({"message": "Error logging detection", "error": str(e)}), 500

@@ -2,8 +2,6 @@ Flask
 flask-cors
 flask-sqlalchemy
 spacy
-opencv-python
-torch
 numpy
 psycopg2-binary
 beautifulsoup4
@@ -15,4 +13,7 @@ moviepy
 SpeechRecognition
 m3u8
 cloudscraper
+twilio
+blinker
+selenium-wire 
 

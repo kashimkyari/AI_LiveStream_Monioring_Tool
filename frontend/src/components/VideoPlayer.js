@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import Hls from 'hls.js';
 import IframePlayer from './IframePlayer';
+import axios from 'axios';
 
 // TensorFlow and models
 import '@tensorflow/tfjs';
@@ -8,7 +9,7 @@ import * as cocoSsd from '@tensorflow-models/coco-ssd';
 import * as handpose from '@tensorflow-models/handpose';
 import * as bodyPix from '@tensorflow-models/body-pix';
 
-const HlsPlayer = ({ streamerUid, onDetection }) => {
+const HlsPlayer = ({ m3u8Url, onDetection }) => {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
 
@@ -23,11 +24,8 @@ const HlsPlayer = ({ streamerUid, onDetection }) => {
   const [hasError, setHasError] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
 
-  // Correct streamerUid if needed
-  const actualStreamerUid = streamerUid !== "${streamerUid}" ? streamerUid : "";
-  const hlsUrl = actualStreamerUid
-    ? `https://b-hls-11.doppiocdn.live/hls/${actualStreamerUid}/${actualStreamerUid}.m3u8`
-    : "";
+  // State to track if a notification has been sent recently
+  const [notificationSent, setNotificationSent] = useState(false);
 
   // Load the coco-ssd model once on mount
   useEffect(() => {
@@ -84,8 +82,6 @@ const HlsPlayer = ({ streamerUid, onDetection }) => {
     };
     fetchFlaggedObjects();
   }, []);
-
-
 
   // Real-time detection logic using multiple TensorFlow.js models
   useEffect(() => {
@@ -202,9 +198,21 @@ const HlsPlayer = ({ streamerUid, onDetection }) => {
         // Notify parent component with flagged detections.
         if (onDetection) onDetection(flaggedPredictions);
 
-        // Send Telegram notification if flagged objects are detected.
-        if (flaggedPredictions.length > 0) {
-          notifyDetection(flaggedPredictions);
+        // Send detection to backend for logging
+        if (flaggedPredictions.length > 0 && !notificationSent) {
+          // Capture the annotated frame
+          const annotatedImage = canvas.toDataURL('image/jpeg', 0.8);
+
+          axios.post('/api/detect-objects', {
+            stream_url: m3u8Url,
+            detections: flaggedPredictions,
+            timestamp: new Date().toISOString(),
+            annotated_image: annotatedImage,
+          });
+
+          // Set notification sent to true and reset after 10 seconds
+          setNotificationSent(true);
+          setTimeout(() => setNotificationSent(false), 10000); // 10 seconds cooldown
         }
       } catch (error) {
         console.error("Detection error:", error);
@@ -231,22 +239,22 @@ const HlsPlayer = ({ streamerUid, onDetection }) => {
       video.removeEventListener('ended', handlePause);
       clearInterval(detectionInterval);
     };
-  }, [onDetection, flaggedObjects]);
+  }, [onDetection, flaggedObjects, m3u8Url, notificationSent]);
 
   // HLS player initialization logic
   useEffect(() => {
     let hls;
-    if (!hlsUrl) {
+    if (!m3u8Url) {
       setIsLoading(false);
       setHasError(true);
-      setErrorMessage("Invalid streamer UID");
+      setErrorMessage("Invalid stream URL");
       return;
     }
 
     const initializePlayer = () => {
       if (Hls.isSupported()) {
         hls = new Hls({ autoStartLoad: true, startLevel: -1, debug: false });
-        hls.loadSource(hlsUrl);
+        hls.loadSource(m3u8Url);
         hls.attachMedia(videoRef.current);
 
         hls.on(Hls.Events.MANIFEST_PARSED, () => {
@@ -262,7 +270,7 @@ const HlsPlayer = ({ streamerUid, onDetection }) => {
           }
         });
       } else if (videoRef.current.canPlayType('application/vnd.apple.mpegurl')) {
-        videoRef.current.src = hlsUrl;
+        videoRef.current.src = m3u8Url;
         videoRef.current.addEventListener('loadedmetadata', () => {
           setIsLoading(false);
           videoRef.current.play().catch(console.error);
@@ -276,7 +284,7 @@ const HlsPlayer = ({ streamerUid, onDetection }) => {
 
     initializePlayer();
     return () => hls?.destroy();
-  }, [hlsUrl, streamerUid]);
+  }, [m3u8Url]);
 
   return (
     <div className="hls-player-container">
@@ -328,14 +336,32 @@ const VideoPlayer = ({
   const [isOnline, setIsOnline] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [m3u8Url, setM3u8Url] = useState(null);
 
+  // Fetch the m3u8 URL for Chaturbate streams
   useEffect(() => {
-    if (platform.toLowerCase() === 'stripchat' && staticThumbnail) {
-      setLoading(false);
-    } else if (platform.toLowerCase() === 'chaturbate' && streamerName) {
-      const timestamp = Date.now();
-      const chaturbateThumbnail = `https://thumb.live.mmcdn.com/ri/${streamerName}.jpg?${timestamp}`;
-      setThumbnail(chaturbateThumbnail);
+    if (platform.toLowerCase() === 'chaturbate' && streamerName) {
+      const fetchM3u8Url = async () => {
+        try {
+          const response = await fetch(`/api/streams?platform=chaturbate&streamer=${streamerName}`);
+          if (!response.ok) {
+            throw new Error(`HTTP error! Status: ${response.status}`);
+          }
+          const data = await response.json();
+          if (data.length > 0 && data[0].m3u8_url) {
+            setM3u8Url(data[0].m3u8_url);
+          } else {
+            throw new Error("No m3u8 URL found for the stream");
+          }
+        } catch (error) {
+          console.error("Error fetching m3u8 URL:", error);
+          setIsOnline(false);
+        } finally {
+          setLoading(false);
+        }
+      };
+      fetchM3u8Url();
+    } else if (platform.toLowerCase() === 'stripchat' && staticThumbnail) {
       setLoading(false);
     } else {
       setLoading(false);
@@ -354,15 +380,15 @@ const VideoPlayer = ({
   const renderPlayer = () => {
     if (platform.toLowerCase() === 'stripchat') {
       if (streamerUid) {
-        return <HlsPlayer streamerUid={streamerUid} onDetection={onDetection} />;
+        return <HlsPlayer m3u8Url={`https://b-hls-11.doppiocdn.live/hls/${streamerUid}/${streamerUid}.m3u8`} onDetection={onDetection} />;
       } else {
         return <div className="error-message">No valid streamer UID provided for Stripchat.</div>;
       }
     } else if (platform.toLowerCase() === 'chaturbate') {
-      if (streamerName) {
-        return <IframePlayer streamerName={streamerName} />;
+      if (m3u8Url) {
+        return <HlsPlayer m3u8Url={m3u8Url} onDetection={onDetection} />;
       } else {
-        return <div className="error-message">No valid streamer name provided for Chaturbate.</div>;
+        return <div className="error-message">No valid m3u8 URL provided for Chaturbate.</div>;
       }
     } else {
       return <div className="error-message">Unsupported platform: {platform}.</div>;
@@ -475,7 +501,7 @@ const VideoPlayer = ({
           background: rgba(0, 0, 0, 0.7);
           z-index: 5;
         }
-
+        
         .error-overlay {
           position: absolute;
           top: 0;

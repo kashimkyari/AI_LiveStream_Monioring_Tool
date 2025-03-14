@@ -18,7 +18,6 @@ const ChaturbateTable = ({ streams, onDelete }) => {
         {streams.map((stream) => (
           <tr key={stream.id}>
             <td>{stream.id}</td>
-            
             <td>{stream.streamer_username}</td>
             <td>
               <button 
@@ -53,10 +52,8 @@ const StripchatTable = ({ streams, onDelete }) => {
         {streams.map((stream) => (
           <tr key={stream.id}>
             <td>{stream.id}</td>
-            
             <td>{stream.streamer_username}</td>
             <td>{stream.streamer_uid || 'N/A'}</td>
-            
             <td>
               {stream.static_thumbnail ? (
                 <img
@@ -90,6 +87,7 @@ const AddStreamForm = ({ onAddStream }) => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState(null);
 
+  // Handle submission of the add stream form
   const handleSubmit = async (e) => {
     e.preventDefault();
     setIsSubmitting(true);
@@ -101,6 +99,7 @@ const AddStreamForm = ({ onAddStream }) => {
         platform: platform
       });
       
+      // Call parent's add handler with the new stream data
       onAddStream(response.data.stream);
       setRoomUrl('');
       setIsSubmitting(false);
@@ -153,14 +152,14 @@ const AddStreamForm = ({ onAddStream }) => {
 };
 
 function StreamsPage() {
-  // State variables
+  // State variables for each platform's streams and UI state
   const [chaturbateStreams, setChaturbateStreams] = useState([]);
   const [stripchatStreams, setStripchatStreams] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [activeTab, setActiveTab] = useState('chaturbate');
 
-  // Fetch streams for a specific platform
+  // Fetch streams for a specific platform from the API
   const fetchStreams = async (platform) => {
     setLoading(true);
     try {
@@ -182,7 +181,7 @@ function StreamsPage() {
     }
   };
 
-  // Delete a stream
+  // Delete a stream using its ID and platform
   const handleDeleteStream = async (streamId, platform) => {
     if (!window.confirm('Are you sure you want to delete this stream?')) {
       return;
@@ -202,7 +201,7 @@ function StreamsPage() {
     }
   };
 
-  // Add a new stream
+  // Add a new stream to the corresponding platform list and set the active tab
   const handleAddStream = (newStream) => {
     if (newStream.platform.toLowerCase() === 'chaturbate') {
       setChaturbateStreams((prevStreams) => [...prevStreams, newStream]);
@@ -291,7 +290,7 @@ function StreamsPage() {
         )}
       </div>
 
-     <style jsx>{`
+      <style jsx>{`
         .streams-container {
           padding: 20px;
           max-width: 900px;
@@ -454,28 +453,6 @@ function StreamsPage() {
 
         .streams-table tr:hover {
           background: #252525;
-        }
-
-        .stream-link {
-          color: #007bff;
-          text-decoration: none;
-          transition: all 0.3s ease;
-        }
-
-        .stream-link:hover {
-          text-decoration: underline;
-        }
-
-        .edge-url {
-          max-width: 200px;
-          font-size: 0.75rem;
-        }
-
-        .truncate-text {
-          display: block;
-          overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
         }
 
         .thumbnail-image {
