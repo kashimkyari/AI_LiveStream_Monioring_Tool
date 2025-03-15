@@ -41,22 +41,41 @@ def update_job_progress(job_id, percent, message):
     }
     logging.info("Job %s progress: %s%% - %s", job_id, percent, message)
 
-def fetch_m3u8_from_page(url, timeout=90, retries=3):
-    chrome_options = Options()
-    chrome_options.add_argument("--headless")
-    chrome_options.add_argument("--disable-gpu")
-    chrome_options.add_argument("--no-sandbox")
-    unique_user_data_dir = tempfile.mkdtemp()
-    chrome_options.add_argument(f"--user-data-dir={unique_user_data_dir}")
+def read_proxies(file_path):
+    """Read SOCKS5 proxies from a file."""
+    with open(file_path, 'r') as file:
+        proxies = [line.strip() for line in file if line.strip()]
+    return proxies
 
-    driver = webdriver.Chrome(options=chrome_options)
-    driver.scopes = ['.*\\.m3u8']
+def fetch_m3u8_from_page(url, timeout=90, max_retries=3):
+    proxies_file = os.path.join(os.path.dirname(__file__), 'socks5.txt')
+    proxies = read_proxies(proxies_file)
 
-    for attempt in range(retries):
+    if not proxies:
+        raise ValueError("No proxies found in the file.")
+
+    for attempt in range(max_retries):
+        proxy = random.choice(proxies)
+        proxy_host, proxy_port = proxy.split(':')
+
+        seleniumwire_options = {
+            'proxy': {
+                'http': f'socks5://{proxy_host}:{proxy_port}',
+                'https': f'socks5://{proxy_host}:{proxy_port}',
+                'no_proxy': 'localhost,127.0.0.1'
+            }
+        }
+
         try:
-            logging.info(f"Opening URL: {url}")
+            driver = webdriver.Chrome(
+                options=chrome_options,
+                seleniumwire_options=seleniumwire_options
+            )
+            driver.scopes = ['.*\\.m3u8']
+
+            logging.info(f"Attempt {attempt + 1}: Opening URL: {url} using proxy: {proxy}")
             driver.get(url)
-            time.sleep(5)  # Allow page to load network requests.
+            time.sleep(5)
 
             found_url = None
             elapsed = 0
@@ -68,21 +87,21 @@ def fetch_m3u8_from_page(url, timeout=90, retries=3):
                         logging.info(f"Found M3U8 URL: {found_url}")
                         break
                 if found_url:
-                    return found_url
+                    break
                 time.sleep(1)
                 elapsed += 1
 
+            return found_url if found_url else None
+
         except Exception as e:
             logging.error(f"Attempt {attempt + 1} failed: {e}")
-            if attempt < retries - 1:
-                time.sleep(2 ** attempt)  # Exponential backoff
+            if attempt < max_retries - 1:
+                logging.info("Retrying with a different proxy...")
             else:
                 return None
 
         finally:
             driver.quit()
-
-    return None
 
 
 def scrape_chaturbate_data(url, progress_callback=None):
