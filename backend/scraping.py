@@ -75,7 +75,11 @@ def fetch_m3u8_from_page(url, timeout=90):
 
     except Exception as e:
         logging.error(f"Error fetching M3U8 URL: {e}")
-        return None
+        logging.error(f"Attempt {attempt + 1} failed: {e}")
+            if attempt < retries - 1:
+                time.sleep(2 ** attempt)  # Exponential backoff
+            else:
+                return None
 
     finally:
         driver.quit()
