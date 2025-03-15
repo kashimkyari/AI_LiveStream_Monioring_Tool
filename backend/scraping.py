@@ -74,6 +74,9 @@ def fetch_m3u8_from_page(url, timeout=90):
     
     # Randomly select a proxy from the list.
     selected_proxy = random.choice(proxies)
+    # If the proxy doesn't contain a scheme, assume "http://"
+    if "://" not in selected_proxy:
+        selected_proxy = "http://" + selected_proxy
     logging.info("Selected proxy: %s", selected_proxy)
 
     # Use the selected proxy directly.
