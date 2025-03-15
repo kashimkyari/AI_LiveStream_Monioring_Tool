@@ -41,7 +41,7 @@ def update_job_progress(job_id, percent, message):
     }
     logging.info("Job %s progress: %s%% - %s", job_id, percent, message)
 
-def fetch_m3u8_from_page(url, timeout=90):
+def fetch_m3u8_from_page(url, timeout=90, retries=3):
     chrome_options = Options()
     chrome_options.add_argument("--headless")
     chrome_options.add_argument("--disable-gpu")
@@ -52,37 +52,38 @@ def fetch_m3u8_from_page(url, timeout=90):
     driver = webdriver.Chrome(options=chrome_options)
     driver.scopes = ['.*\\.m3u8']
 
-    try:
-        logging.info(f"Opening URL: {url}")
-        driver.get(url)
-        time.sleep(5)  # Allow page to load network requests.
+    for attempt in range(retries):
+        try:
+            logging.info(f"Opening URL: {url}")
+            driver.get(url)
+            time.sleep(5)  # Allow page to load network requests.
 
-        found_url = None
-        elapsed = 0
+            found_url = None
+            elapsed = 0
 
-        while elapsed < timeout:
-            for request in driver.requests:
-                if request.response and ".m3u8" in request.url:
-                    found_url = request.url
-                    logging.info(f"Found M3U8 URL: {found_url}")
-                    break
-            if found_url:
-                break
-            time.sleep(1)
-            elapsed += 1
+            while elapsed < timeout:
+                for request in driver.requests:
+                    if request.response and ".m3u8" in request.url:
+                        found_url = request.url
+                        logging.info(f"Found M3U8 URL: {found_url}")
+                        break
+                if found_url:
+                    return found_url
+                time.sleep(1)
+                elapsed += 1
 
-        return found_url if found_url else None
-
-    except Exception as e:
-        logging.error(f"Error fetching M3U8 URL: {e}")
-        logging.error(f"Attempt {attempt + 1} failed: {e}")
+        except Exception as e:
+            logging.error(f"Attempt {attempt + 1} failed: {e}")
             if attempt < retries - 1:
                 time.sleep(2 ** attempt)  # Exponential backoff
             else:
                 return None
 
-    finally:
-        driver.quit()
+        finally:
+            driver.quit()
+
+    return None
+
 
 def scrape_chaturbate_data(url, progress_callback=None):
     try:
