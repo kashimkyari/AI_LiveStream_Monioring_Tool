@@ -1,19 +1,10 @@
+#!/usr/bin/env python
 import sys
 import types
-import tempfile  # For generating unique user-data directories
-import os
-import random
-import logging
-import uuid
-import time
-from concurrent.futures import ThreadPoolExecutor
-from seleniumwire import webdriver
-from selenium.webdriver.chrome.options import Options
-
-# --- Monkey Patch for blinker._saferef ---
+# --- Monkey Patch for blinker._saferef (must be at the very top) ---
 if 'blinker._saferef' not in sys.modules:
-    saferef = types.ModuleType('blinker._saferef')
     import weakref
+    saferef = types.ModuleType("blinker._saferef")
     class SafeRef(weakref.ref):
         def __init__(self, ob, callback=None):
             super().__init__(ob, callback)
@@ -26,8 +17,18 @@ if 'blinker._saferef' not in sys.modules:
             except Exception:
                 return False
     saferef.SafeRef = SafeRef
-    sys.modules['blinker._saferef'] = saferef
+    sys.modules["blinker._saferef"] = saferef
 # --- End of Monkey Patch ---
+
+import tempfile  # For generating unique user-data directories
+import os
+import random
+import logging
+import uuid
+import time
+from concurrent.futures import ThreadPoolExecutor
+from seleniumwire import webdriver
+from selenium.webdriver.chrome.options import Options
 
 # Configure logging to output to the terminal.
 logging.basicConfig(
