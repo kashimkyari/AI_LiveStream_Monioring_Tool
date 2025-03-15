@@ -39,7 +39,15 @@ logging.basicConfig(
 )
 
 def read_proxies(file_path):
-    """Read SOCKS5 proxies from a file."""
+    """
+    Read SOCKS5 proxies from a file.
+    Expected file format (socks5.txt):
+      185.226.204.160:5713
+      103.210.206.26:8080
+      156.228.116.140:3128
+      162.220.246.225:6509
+      72.10.160.93:12649
+    """
     with open(file_path, 'r') as file:
         proxies = [line.strip() for line in file if line.strip()]
     return proxies
@@ -56,25 +64,23 @@ def update_job_progress(job_id, percent, message):
     logging.info("Job %s progress: %s%% - %s", job_id, percent, message)
 
 def fetch_m3u8_from_page(url, timeout=90):
-    # Path to the SOCKS5 proxies file
+    # Get proxies from socks5.txt located in the same directory as this script.
     proxies_file = os.path.join(os.path.dirname(__file__), 'socks5.txt')
     proxies = read_proxies(proxies_file)
-
     if not proxies:
-        raise ValueError("No proxies found in the file.")
-
-    # Randomly select a proxy from the list
+        raise ValueError("No proxies found in socks5.txt")
+    
+    # Randomly select a proxy from the list.
     proxy = random.choice(proxies)
     proxy_host, proxy_port = proxy.split(':')
 
-    # Configure Selenium WebDriver with the selected proxy
+    # Configure Selenium WebDriver with the selected proxy.
     chrome_options = Options()
     chrome_options.add_argument("--headless")
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
 
-    # Set up Selenium Wire options for SOCKS5 proxy
     seleniumwire_options = {
         'proxy': {
             'http': f'socks5://{proxy_host}:{proxy_port}',
@@ -87,31 +93,40 @@ def fetch_m3u8_from_page(url, timeout=90):
         options=chrome_options,
         seleniumwire_options=seleniumwire_options
     )
+    # Limit captured requests to those ending with .m3u8.
     driver.scopes = ['.*\\.m3u8']
 
     try:
         logging.info(f"Opening URL: {url} using proxy: {proxy}")
         driver.get(url)
-        time.sleep(5)  # Allow page to load network requests.
+        time.sleep(5)  # Allow the page to load network requests.
 
         found_url = None
         elapsed = 0
+        logged_requests = set()
 
         while elapsed < timeout:
+            # Log any new request.
             for request in driver.requests:
+                if request.url not in logged_requests:
+                    logging.info("Captured request: %s", request.url)
+                    logged_requests.add(request.url)
+                # Check if the request URL contains '.m3u8'.
                 if request.response and ".m3u8" in request.url:
                     found_url = request.url
-                    logging.info(f"Found M3U8 URL: {found_url}")
+                    logging.info("Found M3U8 URL: %s", found_url)
                     break
             if found_url:
                 break
             time.sleep(1)
             elapsed += 1
 
+        if not found_url:
+            logging.error("Timeout reached after %s seconds without finding a .m3u8 URL", timeout)
         return found_url if found_url else None
 
     except Exception as e:
-        logging.error(f"Error fetching M3U8 URL: {e}")
+        logging.error("Error fetching M3U8 URL: %s", e)
         return None
 
     finally:
@@ -121,22 +136,18 @@ def scrape_chaturbate_data(url, progress_callback=None):
     try:
         if progress_callback:
             progress_callback(10, "Fetching Chaturbate page")
-
         chaturbate_m3u8_url = fetch_m3u8_from_page(url)
         if not chaturbate_m3u8_url:
             logging.error("Failed to fetch m3u8 URL for Chaturbate stream.")
             if progress_callback:
                 progress_callback(100, "Error: Failed to fetch m3u8 URL")
             return None
-
         streamer_username = url.rstrip("/").split("/")[-1]
-
         result = {
             "streamer_username": streamer_username,
             "chaturbate_m3u8_url": chaturbate_m3u8_url,
         }
         logging.info("Scraped details: %s", result)
-
         if progress_callback:
             progress_callback(100, "Scraping complete")
         return result
@@ -150,25 +161,20 @@ def scrape_stripchat_data(url, progress_callback=None):
     try:
         if progress_callback:
             progress_callback(10, "Fetching Stripchat page")
-
         stripchat_m3u8_url = fetch_m3u8_from_page(url)
         if not stripchat_m3u8_url:
             logging.error("Failed to fetch m3u8 URL for Stripchat stream.")
             if progress_callback:
                 progress_callback(100, "Error: Failed to fetch m3u8 URL")
             return None
-
         if "playlistType=lowLatency" in stripchat_m3u8_url:
             stripchat_m3u8_url = stripchat_m3u8_url.split('?')[0]
-
         streamer_username = url.rstrip("/").split("/")[-1]
-
         result = {
             "streamer_username": streamer_username,
             "stripchat_m3u8_url": stripchat_m3u8_url,
         }
         logging.info("Scraped details: %s", result)
-
         if progress_callback:
             progress_callback(100, "Scraping complete")
         return result
