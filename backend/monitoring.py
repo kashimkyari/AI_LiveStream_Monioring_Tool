@@ -1,29 +1,16 @@
 import time
 import threading
-import uuid
-import json
 import concurrent.futures
 import logging
 from datetime import datetime, timedelta
-from collections import defaultdict
-from PIL import Image
-import numpy as np
-import cv2
-import requests
-from io import BytesIO
-import os
 from config import app
 from extensions import db
 from models import Stream, Log, Assignment
-from notifications import send_full_telegram_notification_sync
-from detection import detect_frame, update_flagged_objects
+from notifications import *
 
 monitoring_executor = concurrent.futures.ThreadPoolExecutor(max_workers=20)
 
 def monitor_stream(stream_url):
-    """
-    With backend object detection disabled, this monitor simply logs that detection is off and sleeps.
-    """
     while True:
         with app.app_context():
             stream = Stream.query.filter_by(room_url=stream_url).first()
@@ -55,7 +42,7 @@ def start_notification_monitor():
                     for log in logs:
                         detections = log.details.get("detections", [])
                         if detections:
-                            send_full_telegram_notification_sync(log, detections)
+                            send_notifications(log, detections)
                     if logs:
                         last_notified_time = max(log.timestamp for log in logs)
             except Exception as e:

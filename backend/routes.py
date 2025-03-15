@@ -16,31 +16,12 @@ from config import app
 from extensions import db
 from models import User, Stream, Assignment, Log, ChatKeyword, FlaggedObject, TelegramRecipient, ChaturbateStream, StripchatStream
 from utils import allowed_file, login_required
-from notifications import send_chat_telegram_notification
+from notifications import *
 from scraping import scrape_stripchat_data, scrape_chaturbate_data, run_scrape_job, scrape_jobs
 from detection import detect_frame, detect_chat, update_flagged_objects, refresh_keywords
-from monitoring import start_monitoring, start_notification_monitor
+from monitoring import *
 
-# --------------------------------------------------------------------
-# New helper function to send notifications
-# --------------------------------------------------------------------
-def send_notifications(log_entry, detections=None):
-    """
-    Sends a telegram notification for the detection event.
-    This function uses the annotated image and a custom message.
-    """
-    if log_entry.event_type == "object_detection":
-        message = f"Detected {len(detections)} object(s) in stream {log_entry.room_url}."
-        annotated_image = log_entry.details.get("annotated_image")
-        if annotated_image:
-            # Send telegram notification using the provided annotated image and message.
-            send_chat_telegram_notification(annotated_image, message)
-        else:
-            # If no annotated image is provided, log the notification.
-            print("No annotated image provided for notification:", message)
-    elif log_entry.event_type == "video_notification":
-        message = log_entry.details.get("message", "Video event occurred")
-        send_chat_telegram_notification(None, message)
+
 
 # --------------------------------------------------------------------
 # Endpoints
@@ -483,77 +464,6 @@ def get_agent_dashboard():
         "assignments": [a.stream.serialize() for a in assignments if a.stream]
     })
 
-@app.route("/api/test/visual", methods=["POST"])
-@login_required(role="admin")
-def test_visual():
-    if "video" not in request.files:
-        return jsonify({"message": "No file uploaded"}), 400
-    file = request.files["video"]
-    if not allowed_file(file.filename):
-        return jsonify({"message": "Invalid file type"}), 400
-    filename = file.filename
-    filepath = os.path.join(app.config["UPLOAD_FOLDER"], filename)
-    os.makedirs(os.path.dirname(filepath), exist_ok=True)
-    file.save(filepath)
-    import cv2
-    cap = cv2.VideoCapture(filepath)
-    ret, frame = cap.read()
-    cap.release()
-    os.remove(filepath)
-    if not ret:
-        return jsonify({"message": "Error reading video"}), 400
-    results = detect_frame(frame)
-    return jsonify({"results": results})
-
-@app.route("/api/test/visual/frame", methods=["POST"])
-@login_required(role="admin")
-def test_visual_frame():
-    if "frame" not in request.files:
-        return jsonify({"message": "No frame uploaded"}), 400
-    file = request.files["frame"]
-    try:
-        img = Image.open(file.stream).convert("RGB")
-        frame = np.array(img)
-        results = detect_frame(frame)
-        return jsonify({"results": results})
-    except Exception as e:
-        return jsonify({"message": "Processing error: " + str(e)}), 500
-
-@app.route("/api/test/visual/stream", methods=["GET"])
-@login_required(role="admin")
-def stream_visual():
-    def generate():
-        import json
-        import time
-        import cv2
-        cap = cv2.VideoCapture(0)
-        if not cap.isOpened():
-            yield "data: " + json.dumps({"error": "Could not open video source"}) + "\n\n"
-            return
-        detected_objects_set = set()
-        try:
-            while True:
-                ret, frame = cap.read()
-                if not ret:
-                    yield "data: " + json.dumps({"error": "Frame capture failed"}) + "\n\n"
-                    continue
-                try:
-                    results = detect_frame(frame)
-                    for det in results:
-                        if "class" in det:
-                            detected_objects_set.add(det["class"])
-                    payload = {
-                        "results": results,
-                        "detected_objects": list(detected_objects_set),
-                        "model": "yolov10m"
-                    }
-                    yield "data: " + json.dumps(payload) + "\n\n"
-                except Exception as e:
-                    yield "data: " + json.dumps({"error": "Detection error: " + str(e)}) + "\n\n"
-                time.sleep(0.5)
-        finally:
-            cap.release()
-    return current_app.response_class(generate(), mimetype="text/event-stream")
 
 @app.route("/detection-images/<filename>")
 def serve_detection_image(filename):
@@ -755,3 +665,101 @@ def delete_all_notifications():
     Log.query.filter(Log.event_type.in_(['object_detection', 'chat_detection'])).delete()
     db.session.commit()
     return jsonify({"message": "All notifications deleted"})
+
+
+
+@app.route("/api/send-telegram-message", methods=["POST"])
+@login_required(role="admin")
+def send_telegram_message():
+    data = request.get_json()
+    message = data.get("message")
+    if not message:
+        return jsonify({"message": "Message is required"}), 400
+
+    try:
+        recipients = TelegramRecipient.query.all()
+        if not recipients:
+            return jsonify({"message": "No Telegram recipients found"}), 404
+
+        for recipient in recipients:
+            send_text_message(message, recipient.chat_id)
+
+        return jsonify({"message": "Message sent to all Telegram recipients"}), 200
+    except Exception as e:
+        return jsonify({"message": "Error sending Telegram messages", "error": str(e)}), 500
+
+
+@app.route("/api/detect-keyword", methods=["POST"])
+@login_required()
+def detect_keyword():
+    try:
+        data = request.get_json()
+        keyword = data.get("keyword")
+        timestamp = data.get("timestamp")
+        stream_url = data.get("stream_url")
+
+        if not keyword or not timestamp or not stream_url:
+            return jsonify({"message": "Missing required fields"}), 400
+
+        # Log the keyword detection
+        log_entry = Log(
+            room_url=stream_url,
+            event_type="audio_detection",
+            details={
+                "keyword": keyword,
+                "timestamp": timestamp,
+            }
+        )
+        db.session.add(log_entry)
+        db.session.commit()
+
+        # Send notifications
+        send_notifications(log_entry, {"keyword": keyword})
+
+        return jsonify({"message": "Keyword detection logged successfully"}), 201
+    except Exception as e:
+        return jsonify({"message": "Error logging keyword detection", "error": str(e)}), 500
+
+@app.route("/api/detection-events", methods=["POST"])
+def handle_detection_events():
+    try:
+        data = request.get_json()
+        event_type = data['type']
+        stream_url = data['stream_url']
+        
+        # Common base for all notifications
+        log_entry = Log(
+            room_url=stream_url,
+            timestamp=datetime.fromisoformat(data['timestamp']),
+            read=False
+        )
+
+        if event_type == 'visual':
+            log_entry.event_type = 'object_detection'
+            log_entry.details = {
+                'detections': data['detections'],
+                'annotated_image': data['annotated_image'],
+                'confidence': data['confidence'],
+                'streamer_name': data['streamer_name'],
+                'platform': data['platform']
+            }
+        elif event_type == 'audio':
+            log_entry.event_type = 'audio_detection'
+            log_entry.details = {
+                'keyword': data['keyword'],
+                'confidence': data['confidence'],
+                'streamer_name': data['streamer_name'],
+                'platform': data['platform']
+            }
+        else:
+            return jsonify({"error": "Invalid event type"}), 400
+
+        db.session.add(log_entry)
+        db.session.commit()
+        
+        # Trigger notifications
+        send_notifications(log_entry)
+        return jsonify({"message": "Detection logged"}), 201
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500

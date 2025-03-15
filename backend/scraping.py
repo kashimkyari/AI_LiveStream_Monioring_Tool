@@ -1,6 +1,7 @@
 import sys
 import types
 import tempfile  # New import for generating unique user-data directories
+import os
 
 # --- Monkey Patch for blinker._saferef ---
 if 'blinker._saferef' not in sys.modules:
@@ -23,23 +24,17 @@ if 'blinker._saferef' not in sys.modules:
 
 import re
 import logging
-import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
 import uuid
 import time
+from concurrent.futures import ThreadPoolExecutor
 from seleniumwire import webdriver
 from selenium.webdriver.chrome.options import Options
 
 # Global dictionary to hold scraping job statuses.
 scrape_jobs = {}
+executor = ThreadPoolExecutor(max_workers=5)  # Thread pool for parallel scraping
 
 def update_job_progress(job_id, percent, message):
-    """
-    Update the progress status of a scraping job.
-    
-    Critical Log: Outputs job progress with percentage and message.
-    """
     scrape_jobs[job_id] = {
         "progress": percent,
         "message": message,
@@ -51,7 +46,6 @@ def fetch_m3u8_from_page(url, timeout=90):
     chrome_options.add_argument("--headless")
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--no-sandbox")
-    # Specify a unique user data directory for each session to avoid conflicts.
     unique_user_data_dir = tempfile.mkdtemp()
     chrome_options.add_argument(f"--user-data-dir={unique_user_data_dir}")
 
@@ -86,19 +80,11 @@ def fetch_m3u8_from_page(url, timeout=90):
     finally:
         driver.quit()
 
-
 def scrape_chaturbate_data(url, progress_callback=None):
-    """
-    Scrape streamer details from a Chaturbate URL.
-    
-    Returns:
-        dict: Containing streamer_username and chaturbate_m3u8_url.
-    """
     try:
         if progress_callback:
             progress_callback(10, "Fetching Chaturbate page")
 
-        # Fetch the m3u8 URL using Selenium Wire and assign to a distinct variable
         chaturbate_m3u8_url = fetch_m3u8_from_page(url)
         if not chaturbate_m3u8_url:
             logging.error("Failed to fetch m3u8 URL for Chaturbate stream.")
@@ -106,12 +92,11 @@ def scrape_chaturbate_data(url, progress_callback=None):
                 progress_callback(100, "Error: Failed to fetch m3u8 URL")
             return None
 
-        # Extract the streamer username from the URL
         streamer_username = url.rstrip("/").split("/")[-1]
 
         result = {
             "streamer_username": streamer_username,
-            "chaturbate_m3u8_url": chaturbate_m3u8_url,  # Distinct key for Chaturbate
+            "chaturbate_m3u8_url": chaturbate_m3u8_url,
         }
         logging.info("Scraped details: %s", result)
 
@@ -125,16 +110,10 @@ def scrape_chaturbate_data(url, progress_callback=None):
         return None
 
 def scrape_stripchat_data(url, progress_callback=None):
-    """
-    Scrape streamer details from a Stripchat URL.
-    
-    Returns:
-        dict: Containing streamer_username and stripchat_m3u8_url.
-    """
     try:
         if progress_callback:
             progress_callback(10, "Fetching Stripchat page")
-        # Fetch the m3u8 URL using Selenium Wire and assign to a distinct variable
+
         stripchat_m3u8_url = fetch_m3u8_from_page(url)
         if not stripchat_m3u8_url:
             logging.error("Failed to fetch m3u8 URL for Stripchat stream.")
@@ -142,16 +121,14 @@ def scrape_stripchat_data(url, progress_callback=None):
                 progress_callback(100, "Error: Failed to fetch m3u8 URL")
             return None
 
-        # Remove the '?playlistType=lowLatency' query parameter if present
         if "playlistType=lowLatency" in stripchat_m3u8_url:
             stripchat_m3u8_url = stripchat_m3u8_url.split('?')[0]
 
-        # Extract the streamer username from the URL
         streamer_username = url.rstrip("/").split("/")[-1]
 
         result = {
             "streamer_username": streamer_username,
-            "stripchat_m3u8_url": stripchat_m3u8_url,  # Distinct key for Stripchat
+            "stripchat_m3u8_url": stripchat_m3u8_url,
         }
         logging.info("Scraped details: %s", result)
 
@@ -165,11 +142,6 @@ def scrape_stripchat_data(url, progress_callback=None):
         return None
 
 def run_scrape_job(job_id, url):
-    """
-    Run a scraping job for the given URL, update job progress, and store the result.
-    
-    Ensures that the job status reflects either the scraped result or an error message.
-    """
     update_job_progress(job_id, 0, "Starting scrape job")
     if "chaturbate.com" in url:
         result = scrape_chaturbate_data(url, progress_callback=lambda p, m: update_job_progress(job_id, p, m))

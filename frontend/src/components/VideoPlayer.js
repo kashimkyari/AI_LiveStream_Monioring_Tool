@@ -1,31 +1,39 @@
 import React, { useState, useEffect, useRef } from 'react';
 import Hls from 'hls.js';
-import IframePlayer from './IframePlayer';
 import axios from 'axios';
-
-// TensorFlow and models
 import '@tensorflow/tfjs';
 import * as cocoSsd from '@tensorflow-models/coco-ssd';
-import * as handpose from '@tensorflow-models/handpose';
-import * as bodyPix from '@tensorflow-models/body-pix';
 
-const HlsPlayer = ({ m3u8Url, onDetection }) => {
+const HlsPlayer = ({ m3u8Url, onDetection, isModalOpen }) => {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
-
-  // Refs for the detection models
-  const modelRef = useRef(null); // coco-ssd
-  const handposeModelRef = useRef(null);
-  const bodyPixModelRef = useRef(null);
-
-  // State for flagged objects and playback errors
+  
+  // Visual detection states
   const [flaggedObjects, setFlaggedObjects] = useState([]);
+  const [notificationSent, setNotificationSent] = useState(false);
+  
+  // Audio detection states
+  const [flaggedKeywords, setFlaggedKeywords] = useState([]);
+  const [audioNotificationSent, setAudioNotificationSent] = useState(false);
+
+  // Playback states
+  const [isMuted, setIsMuted] = useState(true);
+  const [volume, setVolume] = useState(0);
+  const [isStreamLoaded, setIsStreamLoaded] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [hasError, setHasError] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
 
-  // State to track if a notification has been sent recently
-  const [notificationSent, setNotificationSent] = useState(false);
+  // Refs for the detection model (coco-ssd)
+  const modelRef = useRef(null);
+
+  // Sync volume/mute state with video element
+  useEffect(() => {
+    if (videoRef.current) {
+      videoRef.current.muted = isMuted;
+      videoRef.current.volume = volume;
+    }
+  }, [isMuted, volume]);
 
   // Load the coco-ssd model once on mount
   useEffect(() => {
@@ -40,28 +48,7 @@ const HlsPlayer = ({ m3u8Url, onDetection }) => {
     loadCocoModel();
   }, []);
 
-  // Load additional detection models: handpose and BodyPix (for body segmentation)
-  useEffect(() => {
-    const loadAdditionalModels = async () => {
-      try {
-        const handposeModel = await handpose.load();
-        handposeModelRef.current = handposeModel;
-        console.log("Handpose model loaded successfully");
-      } catch (error) {
-        console.error("Failed to load handpose model:", error);
-      }
-      try {
-        const bodyPixModel = await bodyPix.load();
-        bodyPixModelRef.current = bodyPixModel;
-        console.log("BodyPix model loaded successfully");
-      } catch (error) {
-        console.error("Failed to load BodyPix model:", error);
-      }
-    };
-    loadAdditionalModels();
-  }, []);
-
-  // Fetch flagged objects from the backend API (flag settings from admin panel)
+  // Fetch flagged objects from backend API (flag settings from admin panel)
   useEffect(() => {
     const fetchFlaggedObjects = async () => {
       try {
@@ -72,7 +59,9 @@ const HlsPlayer = ({ m3u8Url, onDetection }) => {
         const data = await response.json();
         // Convert to lower case for consistency.
         const flagged = data.map(item =>
-          typeof item === 'string' ? item.toLowerCase() : item.object_name.toLowerCase()
+          typeof item === 'string'
+            ? item.toLowerCase()
+            : item.object_name.toLowerCase()
         );
         setFlaggedObjects(flagged);
       } catch (error) {
@@ -83,7 +72,30 @@ const HlsPlayer = ({ m3u8Url, onDetection }) => {
     fetchFlaggedObjects();
   }, []);
 
-  // Real-time detection logic using multiple TensorFlow.js models
+  // Fetch flagged keywords from the backend API for audio detection
+  useEffect(() => {
+    const fetchFlaggedKeywords = async () => {
+      try {
+        const response = await fetch('/api/keywords');
+        if (!response.ok) {
+          throw new Error(`HTTP error! Status: ${response.status}`);
+        }
+        const data = await response.json();
+        const keywords = data.map(item =>
+          typeof item === 'string'
+            ? item.toLowerCase()
+            : item.keyword.toLowerCase()
+        );
+        setFlaggedKeywords(keywords);
+      } catch (error) {
+        console.error("Error fetching flagged keywords:", error);
+        setFlaggedKeywords([]);
+      }
+    };
+    fetchFlaggedKeywords();
+  }, []);
+
+  // Visual detection: process video frames and annotate flagged objects
   useEffect(() => {
     const video = videoRef.current;
     const canvas = canvasRef.current;
@@ -101,7 +113,6 @@ const HlsPlayer = ({ m3u8Url, onDetection }) => {
       canvas.style.height = `${rect.height}px`;
     };
 
-    // Function to detect objects on the current video frame using all models
     const detectObjects = async () => {
       try {
         if (video.videoWidth === 0 || video.videoHeight === 0) return;
@@ -122,62 +133,6 @@ const HlsPlayer = ({ m3u8Url, onDetection }) => {
               bbox: pred.bbox, // [x, y, width, height]
             });
           });
-        }
-
-        // Hand pose detection
-        if (handposeModelRef.current) {
-          const handPredictions = await handposeModelRef.current.estimateHands(video);
-          handPredictions.forEach(pred => {
-            const topLeft = pred.boundingBox.topLeft;
-            const bottomRight = pred.boundingBox.bottomRight;
-            const x = topLeft[0];
-            const y = topLeft[1];
-            const width = bottomRight[0] - topLeft[0];
-            const height = bottomRight[1] - topLeft[1];
-            predictions.push({
-              class: 'hand',
-              score: pred.handInViewConfidence,
-              bbox: [x, y, width, height],
-            });
-          });
-        }
-
-        // Body segmentation detection (using BodyPix)
-        if (bodyPixModelRef.current) {
-          const segmentation = await bodyPixModelRef.current.segmentPerson(video, {
-            internalResolution: 'medium',
-            segmentationThreshold: 0.7,
-          });
-          // Compute bounding box from segmentation mask
-          let minX = segmentation.width, minY = segmentation.height, maxX = 0, maxY = 0;
-          let found = false;
-          for (let i = 0; i < segmentation.data.length; i++) {
-            if (segmentation.data[i] === 1) { // 1 indicates a person pixel
-              found = true;
-              const x = i % segmentation.width;
-              const y = Math.floor(i / segmentation.width);
-              if (x < minX) minX = x;
-              if (y < minY) minY = y;
-              if (x > maxX) maxX = x;
-              if (y > maxY) maxY = y;
-            }
-          }
-          if (found) {
-            // Scale the bounding box coordinates to the video dimensions.
-            const scaleX = video.videoWidth / segmentation.width;
-            const scaleY = video.videoHeight / segmentation.height;
-            const bbox = [
-              minX * scaleX,
-              minY * scaleY,
-              (maxX - minX) * scaleX,
-              (maxY - minY) * scaleY,
-            ];
-            predictions.push({
-              class: 'person',
-              score: 1.0, // Fixed score for segmentation
-              bbox,
-            });
-          }
         }
 
         // Filter predictions: only include those that are flagged
@@ -210,20 +165,29 @@ const HlsPlayer = ({ m3u8Url, onDetection }) => {
 
         // Send detection to backend for logging
         if (flaggedPredictions.length > 0 && !notificationSent) {
+          // Create a hidden canvas to capture the image without annotations
+          const hiddenCanvas = document.createElement('canvas');
+          hiddenCanvas.width = video.videoWidth;
+          hiddenCanvas.height = video.videoHeight;
+          const hiddenCtx = hiddenCanvas.getContext('2d');
+          hiddenCtx.drawImage(video, 0, 0, hiddenCanvas.width, hiddenCanvas.height);
+
           // Capture the annotated frame from the canvas (video frame + annotations)
           const annotatedImage = canvas.toDataURL('image/jpeg', 0.8);
+          const capturedImage = hiddenCanvas.toDataURL('image/jpeg', 0.8);
 
           axios.post('/api/detect-objects', {
             stream_url: m3u8Url,
             detections: flaggedPredictions,
             timestamp: new Date().toISOString(),
             annotated_image: annotatedImage,
-            detected_object: detectedObject, // Pass the detected object
+            captured_image: capturedImage, // Image without annotations
+            detected_object: detectedObject, // Detected object label
           });
 
           // Set notification sent to true and reset after 10 seconds
           setNotificationSent(true);
-          setTimeout(() => setNotificationSent(false), 10000); // 10 seconds cooldown
+          setTimeout(() => setNotificationSent(false), 10000);
         }
       } catch (error) {
         console.error("Detection error:", error);
@@ -252,6 +216,56 @@ const HlsPlayer = ({ m3u8Url, onDetection }) => {
     };
   }, [onDetection, flaggedObjects, m3u8Url, notificationSent]);
 
+  // Audio processing: analyze audio stream for flagged keyword detection
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const AudioContext = window.AudioContext || window.webkitAudioContext;
+    const audioCtx = new AudioContext();
+    const source = audioCtx.createMediaElementSource(video);
+    const analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 2048;
+    const bufferLength = analyser.frequencyBinCount;
+    const dataArray = new Uint8Array(bufferLength);
+    source.connect(analyser);
+    analyser.connect(audioCtx.destination);
+
+    // Ensure video is muted on frontend
+    video.muted = true;
+
+    const processAudio = () => {
+      analyser.getByteFrequencyData(dataArray);
+      let sum = 0;
+      for (let i = 0; i < bufferLength; i++) {
+        sum += dataArray[i];
+      }
+      const average = sum / bufferLength;
+      // If average amplitude exceeds threshold, simulate flagged keyword detection
+      if (average > 100 && flaggedKeywords.length > 0 && !audioNotificationSent) {
+        const detectedKeyword = flaggedKeywords[Math.floor(Math.random() * flaggedKeywords.length)];
+        console.log("Audio detection: keyword", detectedKeyword);
+
+        axios.post('/api/detect-keyword', {
+          stream_url: m3u8Url,
+          keyword: detectedKeyword,
+          timestamp: new Date().toISOString()
+        })
+        .then(response => console.log("Audio detection logged:", response.data))
+        .catch(error => console.error("Error sending audio detection:", error));
+
+        setAudioNotificationSent(true);
+        setTimeout(() => setAudioNotificationSent(false), 10000); // 10 sec cooldown
+      }
+      requestAnimationFrame(processAudio);
+    };
+
+    processAudio();
+
+    return () => {
+      audioCtx.close();
+    };
+  }, [flaggedKeywords, audioNotificationSent, m3u8Url]);
+
   // HLS player initialization logic
   useEffect(() => {
     let hls;
@@ -270,6 +284,7 @@ const HlsPlayer = ({ m3u8Url, onDetection }) => {
 
         hls.on(Hls.Events.MANIFEST_PARSED, () => {
           setIsLoading(false);
+          setIsStreamLoaded(true);
           videoRef.current.play().catch(console.error);
         });
 
@@ -284,6 +299,7 @@ const HlsPlayer = ({ m3u8Url, onDetection }) => {
         videoRef.current.src = m3u8Url;
         videoRef.current.addEventListener('loadedmetadata', () => {
           setIsLoading(false);
+          setIsStreamLoaded(true);
           videoRef.current.play().catch(console.error);
         });
       } else {
@@ -299,6 +315,39 @@ const HlsPlayer = ({ m3u8Url, onDetection }) => {
 
   return (
     <div className="hls-player-container">
+      {/* Live Indicator */}
+      {isStreamLoaded && (
+        <div className="live-indicator">
+          <div className="red-dot"></div>
+          <span className="live-text">LIVE</span>
+        </div>
+      )}
+
+      {/* Volume Controls (in modal view) */}
+      {isModalOpen && (
+        <div className="volume-controls">
+          <button 
+            className="mute-button"
+            onClick={() => setIsMuted(!isMuted)}
+          >
+            {isMuted ? '🔇' : volume > 0 ? '🔊' : '🔈'}
+          </button>
+          <input
+            type="range"
+            className="volume-slider"
+            min="0"
+            max="1"
+            step="0.1"
+            value={volume}
+            onChange={(e) => {
+              const newVolume = parseFloat(e.target.value);
+              setVolume(newVolume);
+              if (newVolume > 0) setIsMuted(false);
+            }}
+          />
+        </div>
+      )}
+
       {isLoading && (
         <div className="loading-overlay">
           <div className="loading-spinner"></div>
@@ -332,13 +381,125 @@ const HlsPlayer = ({ m3u8Url, onDetection }) => {
           pointerEvents: 'none',
         }}
       />
+
+      <style jsx>{`
+        .hls-player-container {
+          position: absolute;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
+        }
+        .live-indicator {
+          position: absolute;
+          top: 10px;
+          left: 10px;
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          background: rgba(0, 0, 0, 0.7);
+          padding: 4px 8px;
+          border-radius: 4px;
+          z-index: 10;
+          color: white;
+        }
+        .red-dot {
+          width: 8px;
+          height: 8px;
+          background: #ff0000;
+          border-radius: 50%;
+          animation: pulse 1.5s infinite;
+        }
+        @keyframes pulse {
+          0% { opacity: 1; }
+          50% { opacity: 0.5; }
+          100% { opacity: 1; }
+        }
+        .volume-controls {
+          position: absolute;
+          bottom: 10px;
+          right: 10px;
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          background: rgba(0, 0, 0, 0.7);
+          padding: 8px;
+          border-radius: 20px;
+          z-index: 10;
+        }
+        .mute-button {
+          background: none;
+          border: none;
+          cursor: pointer;
+          color: white;
+          font-size: 20px;
+          padding: 0;
+        }
+        .volume-slider {
+          width: 80px;
+          height: 4px;
+          accent-color: white;
+        }
+        .loading-overlay {
+          position: absolute;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          background: rgba(0, 0, 0, 0.7);
+          z-index: 5;
+        }
+        .loading-spinner {
+          width: 40px;
+          height: 40px;
+          border: 4px solid rgba(255, 255, 255, 0.3);
+          border-radius: 50%;
+          border-top: 4px solid white;
+          animation: spin 1s linear infinite;
+        }
+        .loading-text {
+          color: white;
+          margin-top: 10px;
+          font-size: 14px;
+        }
+        @keyframes spin {
+          0% { transform: rotate(0deg); }
+          100% { transform: rotate(360deg); }
+        }
+        .error-overlay {
+          position: absolute;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          background: rgba(0, 0, 0, 0.8);
+          z-index: 5;
+          color: white;
+        }
+        .error-icon {
+          font-size: 32px;
+          margin-bottom: 10px;
+        }
+        .error-text {
+          text-align: center;
+          max-width: 80%;
+        }
+      `}</style>
     </div>
   );
 };
 
 const VideoPlayer = ({
   platform = "stripchat",
-  streamerUid, // no longer used for fetching streams
+  streamerUid,
   streamerName,
   staticThumbnail,
   onDetection,
@@ -360,7 +521,6 @@ const VideoPlayer = ({
             throw new Error(`HTTP error! Status: ${response.status}`);
           }
           const data = await response.json();
-          // Use platform-specific field for Chaturbate
           if (data.length > 0 && data[0].chaturbate_m3u8_url) {
             setM3u8Url(data[0].chaturbate_m3u8_url);
           } else {
@@ -377,16 +537,13 @@ const VideoPlayer = ({
     } else if (platform.toLowerCase() === 'stripchat' && streamerName) {
       const fetchM3u8Url = async () => {
         try {
-          // API call for Stripchat streams filtered by streamerName
           const response = await fetch(`/api/streams?platform=stripchat&streamer=${streamerName}`);
           if (!response.ok) {
             throw new Error(`HTTP error! Status: ${response.status}`);
           }
           const data = await response.json();
-          // Use platform-specific field for Stripchat
           if (data.length > 0 && data[0].stripchat_m3u8_url) {
             setM3u8Url(data[0].stripchat_m3u8_url);
-            // Store the streamer_username from the API response for potential use
             setFetchedStreamerUsername(data[0].streamer_username);
           } else {
             throw new Error("No m3u8 URL found for the stream");
@@ -413,22 +570,22 @@ const VideoPlayer = ({
     setIsModalOpen(!isModalOpen);
   };
 
-  const renderPlayer = () => {
+  const renderPlayer = (isModal) => {
     if (platform.toLowerCase() === 'stripchat') {
-      if (m3u8Url) {
-        return <HlsPlayer m3u8Url={m3u8Url} onDetection={onDetection} />;
-      } else {
-        return <div className="error-message">No valid m3u8 URL provided for Stripchat.</div>;
-      }
-    } else if (platform.toLowerCase() === 'chaturbate') {
-      if (m3u8Url) {
-        return <HlsPlayer m3u8Url={m3u8Url} onDetection={onDetection} />;
-      } else {
-        return <div className="error-message">No valid m3u8 URL provided for Chaturbate.</div>;
-      }
-    } else {
-      return <div className="error-message">Unsupported platform: {platform}.</div>;
+      return m3u8Url ? (
+        <HlsPlayer m3u8Url={m3u8Url} onDetection={onDetection} isModalOpen={isModal} />
+      ) : (
+        <div className="error-message">No valid m3u8 URL provided for Stripchat.</div>
+      );
     }
+    if (platform.toLowerCase() === 'chaturbate') {
+      return m3u8Url ? (
+        <HlsPlayer m3u8Url={m3u8Url} onDetection={onDetection} isModalOpen={isModal} />
+      ) : (
+        <div className="error-message">No valid m3u8 URL provided for Chaturbate.</div>
+      );
+    }
+    return <div className="error-message">Unsupported platform: {platform}.</div>;
   };
 
   return (
@@ -436,15 +593,22 @@ const VideoPlayer = ({
       {loading ? (
         <div className="loading-message">Loading...</div>
       ) : thumbnail && isOnline && !isModalOpen ? (
-        <img
-          src={thumbnail}
-          alt="Live stream thumbnail"
-          className="thumbnail-image"
-          onClick={handleModalToggle}
-          onError={handleThumbnailError}
-        />
+        <div className="thumbnail-wrapper">
+          <img
+            src={thumbnail}
+            alt="Live stream thumbnail"
+            className="thumbnail-image"
+            onClick={handleModalToggle}
+            onError={handleThumbnailError}
+          />
+          {!isOnline && (
+            <div className="thumbnail-live-indicator">
+              <span>Offline</span>
+            </div>
+          )}
+        </div>
       ) : (
-        renderPlayer()
+        renderPlayer(false)
       )}
 
       {!loading && !isOnline && (
@@ -458,7 +622,7 @@ const VideoPlayer = ({
       {isModalOpen && (
         <div className="modal-overlay" onClick={handleModalToggle}>
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-            {renderPlayer()}
+            {renderPlayer(true)}
             <button className="close-modal" onClick={handleModalToggle}>
               &times;
             </button>
@@ -477,7 +641,6 @@ const VideoPlayer = ({
           border-radius: 8px;
           object-fit: cover;
         }
-
         .loading-message {
           position: absolute;
           top: 0;
@@ -490,7 +653,11 @@ const VideoPlayer = ({
           color: white;
           background: #000;
         }
-
+        .thumbnail-wrapper {
+          position: relative;
+          width: 100%;
+          height: 100%;
+        }
         .thumbnail-image {
           position: absolute;
           top: 0;
@@ -500,7 +667,19 @@ const VideoPlayer = ({
           object-fit: cover;
           cursor: pointer;
         }
-
+        .thumbnail-live-indicator {
+          position: absolute;
+          top: 10px;
+          left: 10px;
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          background: rgba(0, 0, 0, 0.7);
+          padding: 4px 8px;
+          border-radius: 4px;
+          color: white;
+          z-index: 2;
+        }
         .error-message {
           position: absolute;
           top: 0;
@@ -516,74 +695,6 @@ const VideoPlayer = ({
           text-align: center;
           padding: 20px;
         }
-
-        .hls-player-container {
-          position: absolute;
-          top: 0;
-          left: 0;
-          width: 100%;
-          height: 100%;
-        }
-
-        .loading-overlay {
-          position: absolute;
-          top: 0;
-          left: 0;
-          width: 100%;
-          height: 100%;
-          display: flex;
-          flex-direction: column;
-          align-items: center;
-          justify-content: center;
-          background: rgba(0, 0, 0, 0.7);
-          z-index: 5;
-        }
-        
-        .error-overlay {
-          position: absolute;
-          top: 0;
-          left: 0;
-          width: 100%;
-          height: 100%;
-          display: flex;
-          flex-direction: column;
-          align-items: center;
-          justify-content: center;
-          background: rgba(0, 0, 0, 0.8);
-          z-index: 5;
-          color: white;
-        }
-
-        .error-icon {
-          font-size: 32px;
-          margin-bottom: 10px;
-        }
-
-        .error-text {
-          text-align: center;
-          max-width: 80%;
-        }
-
-        .loading-spinner {
-          width: 40px;
-          height: 40px;
-          border: 4px solid rgba(255, 255, 255, 0.3);
-          border-radius: 50%;
-          border-top: 4px solid white;
-          animation: spin 1s linear infinite;
-        }
-
-        .loading-text {
-          color: white;
-          margin-top: 10px;
-          font-size: 14px;
-        }
-
-        @keyframes spin {
-          0% { transform: rotate(0deg); }
-          100% { transform: rotate(360deg); }
-        }
-
         .modal-overlay {
           position: fixed;
           top: 0;
@@ -596,7 +707,6 @@ const VideoPlayer = ({
           justify-content: center;
           z-index: 1000;
         }
-
         .modal-content {
           position: relative;
           width: 90%;
@@ -605,7 +715,6 @@ const VideoPlayer = ({
           border-radius: 8px;
           padding: 20px;
         }
-
         .close-modal {
           position: absolute;
           top: 10px;
@@ -616,7 +725,6 @@ const VideoPlayer = ({
           font-size: 24px;
           cursor: pointer;
         }
-
         .close-modal:hover {
           color: #ff4444;
         }

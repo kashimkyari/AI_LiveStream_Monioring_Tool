@@ -1,92 +1,96 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 
 const NotificationsPage = () => {
-  // State variables for notifications and UI controls
+  // Component states
   const [notifications, setNotifications] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [filter, setFilter] = useState('all');
   const [selectedNotification, setSelectedNotification] = useState(null);
 
-  // Fetch notifications on mount and poll every 30 seconds
+  // Fetch notifications with the current filter
+  const fetchNotifications = useCallback(async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      const res = await axios.get(`/api/notifications?filter=${filter}`);
+      if (res.status === 200) {
+        // Enhance each notification with its details for easier access
+        const notificationsData = res.data.map(notification => ({
+          ...notification,
+          details: {
+            ...notification.details,
+            annotated_image: notification.details.annotated_image,
+            captured_image: notification.details.captured_image,
+            streamer_uid: notification.details.streamer_uid,
+            streamer_name: notification.details.streamer_name,
+            assigned_agent: notification.details.assigned_agent,
+            platform: notification.details.platform,
+            detected_object: notification.details.detected_object,
+            detections: notification.details.detections,
+            keyword: notification.details.keyword,
+          },
+        }));
+        setNotifications(notificationsData);
+      } else {
+        setError('Failed to load notifications. Please try again.');
+      }
+    } catch (err) {
+      console.error('Error fetching notifications:', err);
+      setError('Failed to load notifications. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  }, [filter]);
+
+  // Poll notifications on mount and every 30 seconds
   useEffect(() => {
     fetchNotifications();
     const interval = setInterval(fetchNotifications, 30000);
     return () => clearInterval(interval);
-  }, [filter]);
-
-  // Fetch notifications from backend with applied filter
-  const fetchNotifications = async () => {
-    try {
-      setLoading(true);
-      const res = await axios.get(`/api/notifications?filter=${filter}`);
-      // Map notifications to ensure details have expected fields for object detections
-      const notificationsData = res.data.map(notification => {
-        if (notification.type === 'object_detection' && notification.details) {
-          return {
-            ...notification,
-            details: {
-              ...notification.details,
-              // Critical: We rely on backend-provided keys such as annotated_image,
-              // streamer_uid, streamer_name, assigned_agent, platform, detected_object, and detections.
-              annotated_image: notification.details.annotated_image,
-              streamer_uid: notification.details.streamer_uid,
-              streamer_name: notification.details.streamer_name,
-              assigned_agent: notification.details.assigned_agent,
-              platform: notification.details.platform,
-              detected_object: notification.details.detected_object,
-              detections: notification.details.detections,
-            },
-          };
-        }
-        return notification;
-      });
-      setNotifications(notificationsData);
-      setLoading(false);
-    } catch (err) {
-      console.error('Error fetching notifications:', err);
-      setError('Failed to load notifications. Please try again.');
-      setLoading(false);
-    }
-  };
+  }, [fetchNotifications]);
 
   // Mark a single notification as read
-  const markAsRead = async (notificationId) => {
+  const markAsRead = useCallback(async (notificationId) => {
     try {
       await axios.put(`/api/notifications/${notificationId}/read`);
-      setNotifications(notifications.map(notification =>
-        notification.id === notificationId
-          ? { ...notification, read: true }
-          : notification
-      ));
+      setNotifications(prev =>
+        prev.map(notification =>
+          notification.id === notificationId ? { ...notification, read: true } : notification
+        )
+      );
     } catch (err) {
       console.error('Error marking notification as read:', err);
     }
-  };
+  }, []);
 
   // Mark all notifications as read
   const markAllAsRead = async () => {
     try {
       await axios.put('/api/notifications/read-all');
-      setNotifications(notifications.map(notification => ({ ...notification, read: true })));
+      setNotifications(prev =>
+        prev.map(notification => ({ ...notification, read: true }))
+      );
     } catch (err) {
       console.error('Error marking all notifications as read:', err);
     }
   };
 
-  // Delete a single notification and update state
-  const deleteNotification = async (notificationId) => {
+  // Delete a single notification
+  const deleteNotification = useCallback(async (notificationId) => {
     try {
       await axios.delete(`/api/notifications/${notificationId}`);
-      setNotifications(notifications.filter(notification => notification.id !== notificationId));
+      setNotifications(prev =>
+        prev.filter(notification => notification.id !== notificationId)
+      );
       if (selectedNotification && selectedNotification.id === notificationId) {
         setSelectedNotification(null);
       }
     } catch (err) {
       console.error('Error deleting notification:', err);
     }
-  };
+  }, [selectedNotification]);
 
   // Delete all notifications
   const deleteAllNotifications = async () => {
@@ -99,7 +103,7 @@ const NotificationsPage = () => {
     }
   };
 
-  // Handle notification click: mark as read if necessary and display details
+  // Handle click on a notification item
   const handleNotificationClick = (notification) => {
     if (!notification.read) {
       markAsRead(notification.id);
@@ -107,7 +111,7 @@ const NotificationsPage = () => {
     setSelectedNotification(notification);
   };
 
-  // Format the confidence score to percentage format
+  // Format confidence score as a percentage string
   const formatConfidence = (confidence) => {
     if (typeof confidence === 'number') {
       return `${(confidence * 100).toFixed(1)}%`;
@@ -115,14 +119,139 @@ const NotificationsPage = () => {
     return 'N/A';
   };
 
-  // Determine color for detection badge based on confidence level
-  const getDetectionColor = (confidence) => {
-    // Ensure confidence is treated as a number; default to 0 if invalid
+  // Get color based on confidence level for badge styling
+  const getConfidenceColor = (confidence) => {
     const confidenceValue = typeof confidence === 'number' ? confidence : 0;
     if (confidenceValue >= 0.9) return '#ff4444';
     if (confidenceValue >= 0.75) return '#ff8c00';
     if (confidenceValue >= 0.5) return '#ffcc00';
     return '#28a745';
+  };
+
+  // Render the details pane for a selected notification
+  const renderNotificationDetails = () => {
+    if (!selectedNotification) {
+      return (
+        <div className="empty-detail">
+          <div className="empty-icon">📋</div>
+          <p>Select a notification to view details</p>
+        </div>
+      );
+    }
+
+    // Common header for both audio and object detection details
+    const commonHeader = (
+      <div className="detail-header">
+        <h3>
+          {selectedNotification.type === 'audio_detection'
+            ? 'Audio Detection Details'
+            : 'Detection Details'}
+        </h3>
+        <div className="detail-actions">
+          {!selectedNotification.read && (
+            <button
+              className="mark-read-btn"
+              onClick={() => markAsRead(selectedNotification.id)}
+            >
+              Mark as Read
+            </button>
+          )}
+          <button
+            className="delete-btn"
+            onClick={() => deleteNotification(selectedNotification.id)}
+          >
+            Delete
+          </button>
+        </div>
+      </div>
+    );
+
+    const commonTimestamp = (
+      <div className="detail-timestamp">
+        Detected at: {new Date(selectedNotification.timestamp).toLocaleString()}
+      </div>
+    );
+
+    if (selectedNotification.type === 'audio_detection') {
+      return (
+        <div className="notification-detail">
+          {commonHeader}
+          {commonTimestamp}
+          <div className="audio-detection-content">
+            <p>
+              Detected keyword: <strong>{selectedNotification.details?.keyword}</strong>
+            </p>
+          </div>
+        </div>
+      );
+    }
+
+    if (selectedNotification.type === 'object_detection') {
+      return (
+        <div className="notification-detail">
+          {commonHeader}
+          {commonTimestamp}
+          <div className="detection-content">
+            <div className="image-gallery">
+              {selectedNotification.details?.annotated_image && (
+                <div className="image-card">
+                  <img
+                    src={selectedNotification.details.annotated_image}
+                    alt="Annotated Detection"
+                    className="detection-image"
+                  />
+                  <div className="image-label">Annotated Image</div>
+                </div>
+              )}
+              {selectedNotification.details?.captured_image && (
+                <div className="image-card">
+                  <img
+                    src={selectedNotification.details.captured_image}
+                    alt="Captured Image"
+                    className="detection-image"
+                  />
+                  <div className="image-label">Captured Image</div>
+                </div>
+              )}
+            </div>
+            <div className="streamer-info-card">
+              <h4>Streamer Information</h4>
+              <div className="info-item">
+                <span className="info-label">Streamer UID:</span>
+                <span className="info-value">{selectedNotification.details?.streamer_uid}</span>
+              </div>
+              <div className="info-item">
+                <span className="info-label">Streamer Name:</span>
+                <span className="info-value">{selectedNotification.details?.streamer_name}</span>
+              </div>
+              <div className="info-item">
+                <span className="info-label">Assigned Agent:</span>
+                <span className="info-value">{selectedNotification.details?.assigned_agent}</span>
+              </div>
+              <div className="info-item">
+                <span className="info-label">Platform:</span>
+                <span className="info-value">{selectedNotification.details?.platform}</span>
+              </div>
+            </div>
+            <div className="detected-objects">
+              <h4>Detected Objects</h4>
+              {selectedNotification.details?.detections?.map((detection, index) => (
+                <div key={index} className="detection-item">
+                  <span className="detection-class">{detection.class}</span>
+                  <span
+                    className="confidence-badge"
+                    style={{ backgroundColor: getConfidenceColor(detection.score) }}
+                  >
+                    {formatConfidence(detection.score)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      );
+    }
+    return null;
   };
 
   return (
@@ -186,21 +315,31 @@ const NotificationsPage = () => {
               {notifications.map((notification) => (
                 <div
                   key={notification.id}
-                  className={`notification-item ${notification.read ? 'read' : 'unread'} ${selectedNotification && selectedNotification.id === notification.id ? 'selected' : ''}`}
+                  className={`notification-item ${notification.read ? 'read' : 'unread'} ${
+                    selectedNotification && selectedNotification.id === notification.id ? 'selected' : ''
+                  }`}
                   onClick={() => handleNotificationClick(notification)}
                 >
-                  <div className="notification-indicator" style={{
-                    backgroundColor: notification.type === 'object_detection'
-                      ? getDetectionColor(notification.details?.detections?.[0]?.score)
-                      : '#007bff'
-                  }}></div>
+                  <div
+                    className="notification-indicator"
+                    style={{
+                      backgroundColor:
+                        notification.type === 'object_detection'
+                          ? getConfidenceColor(notification.details?.detections?.[0]?.score)
+                          : notification.type === 'audio_detection'
+                          ? '#007bff'
+                          : '#28a745',
+                    }}
+                  ></div>
                   <div className="notification-content">
                     <div className="notification-message">
                       {notification.type === 'object_detection'
                         ? `Detected ${notification.details?.detections?.length || 0} objects`
+                        : notification.type === 'audio_detection'
+                        ? `Detected keyword: ${notification.details?.keyword}`
                         : notification.type === 'video_notification'
-                          ? notification.details?.message || 'Video event occurred'
-                          : notification.message}
+                        ? notification.details?.message || 'Video event occurred'
+                        : notification.message}
                     </div>
                     <div className="notification-meta">
                       <span className="notification-time">
@@ -220,117 +359,7 @@ const NotificationsPage = () => {
         </div>
 
         <div className="notification-detail-container">
-          {selectedNotification ? (
-            <div className="notification-detail">
-              <div className="detail-header">
-                <h3>
-                  {selectedNotification.type === 'video_notification'
-                    ? 'Video Notification Details'
-                    : 'Detection Details'}
-                </h3>
-                <div className="detail-actions">
-                  {!selectedNotification.read && (
-                    <button
-                      className="mark-read-btn"
-                      onClick={() => markAsRead(selectedNotification.id)}
-                    >
-                      Mark as Read
-                    </button>
-                  )}
-                  <button
-                    className="delete-btn"
-                    onClick={() => deleteNotification(selectedNotification.id)}
-                  >
-                    Delete
-                  </button>
-                </div>
-              </div>
-
-              <div className="detail-timestamp">
-                Detected at: {new Date(selectedNotification.timestamp).toLocaleString()}
-              </div>
-
-              {selectedNotification.type === 'video_notification' ? (
-                <div className="video-notification-content">
-                  <p>{selectedNotification.details?.message || 'Video event occurred'}</p>
-                  {selectedNotification.details?.stream && (
-                    <div className="info-item">
-                      <span className="info-label">Stream:</span>
-                      <span className="info-value">{selectedNotification.details.stream}</span>
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <div className="detection-content">
-                  <div className="detection-image-container">
-                    {selectedNotification.details?.annotated_image && (
-                      <img
-                        src={selectedNotification.details.annotated_image}
-                        alt="Detection"
-                        className="detection-image"
-                      />
-                    )}
-                  </div>
-
-                  <div className="detection-info">
-                    <div className="info-item">
-                      <span className="info-label">Streamer UID:</span>
-                      <span className="info-value">{selectedNotification.details?.streamer_uid}</span>
-                    </div>
-                    <div className="info-item">
-                      <span className="info-label">Streamer Name:</span>
-                      <span className="info-value">{selectedNotification.details?.streamer_name}</span>
-                    </div>
-                    <div className="info-item">
-                      <span className="info-label">Assigned Agent:</span>
-                      <span className="info-value">{selectedNotification.details?.assigned_agent}</span>
-                    </div>
-                    <div className="info-item">
-                      <span className="info-label">Platform:</span>
-                      <span className="info-value">{selectedNotification.details?.platform}</span>
-                    </div>
-                    {selectedNotification.details?.detected_object && (
-                      <div className="info-item">
-                        <span className="info-label">Detected Object:</span>
-                        <span className="info-value">{selectedNotification.details.detected_object}</span>
-                      </div>
-                    )}
-                    <div className="info-item">
-                      <span className="info-label">Detected Objects:</span>
-                      <span className="info-value">
-                        {selectedNotification.details?.detections?.map((detection, index) => (
-                          <div key={index}>
-                            {detection.class} ({(detection.score * 100).toFixed(1)}%)
-                          </div>
-                        ))}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              <div className="detail-actions-bottom">
-                <button className="action-btn" onClick={() => setSelectedNotification(null)}>
-                  Close Details
-                </button>
-                {selectedNotification.details?.stream && (
-                  <button className="action-btn primary">
-                    View Stream
-                  </button>
-                )}
-                {selectedNotification.details?.agent && (
-                  <button className="action-btn">
-                    Contact Agent
-                  </button>
-                )}
-              </div>
-            </div>
-          ) : (
-            <div className="empty-detail">
-              <div className="empty-icon">📋</div>
-              <p>Select a notification to view details</p>
-            </div>
-          )}
+          {renderNotificationDetails()}
         </div>
       </div>
 
@@ -346,8 +375,12 @@ const NotificationsPage = () => {
         }
 
         @keyframes fadeIn {
-          from { opacity: 0; }
-          to { opacity: 1; }
+          from {
+            opacity: 0;
+          }
+          to {
+            opacity: 1;
+          }
         }
 
         .notifications-controls {
@@ -359,12 +392,15 @@ const NotificationsPage = () => {
           border-bottom: 1px solid #333;
         }
 
-        .filter-controls, .action-controls {
+        .filter-controls,
+        .action-controls {
           display: flex;
           gap: 8px;
         }
 
-        .filter-btn, .mark-all-read, .delete-all {
+        .filter-btn,
+        .mark-all-read,
+        .delete-all {
           padding: 8px 16px;
           border-radius: 6px;
           border: 1px solid #444;
@@ -374,7 +410,9 @@ const NotificationsPage = () => {
           transition: all 0.2s ease;
         }
 
-        .filter-btn:hover, .mark-all-read:hover, .delete-all:hover {
+        .filter-btn:hover,
+        .mark-all-read:hover,
+        .delete-all:hover {
           background: #333;
         }
 
@@ -383,12 +421,14 @@ const NotificationsPage = () => {
           border-color: #666;
         }
 
-        .mark-all-read, .delete-all {
+        .mark-all-read,
+        .delete-all {
           display: flex;
           align-items: center;
         }
 
-        .mark-all-read:disabled, .delete-all:disabled {
+        .mark-all-read:disabled,
+        .delete-all:disabled {
           opacity: 0.5;
           cursor: not-allowed;
         }
@@ -519,7 +559,8 @@ const NotificationsPage = () => {
           gap: 8px;
         }
 
-        .mark-read-btn, .delete-btn {
+        .mark-read-btn,
+        .delete-btn {
           padding: 6px 12px;
           border-radius: 4px;
           border: none;
@@ -559,12 +600,20 @@ const NotificationsPage = () => {
           overflow-y: auto;
         }
 
-        .detection-image-container {
+        .image-gallery {
           display: flex;
-          justify-content: center;
+          gap: 20px;
+          margin-bottom: 20px;
+        }
+
+        .image-card {
           background: #252525;
           border-radius: 8px;
           overflow: hidden;
+          flex: 1;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
         }
 
         .detection-image {
@@ -573,18 +622,32 @@ const NotificationsPage = () => {
           object-fit: contain;
         }
 
-        .detection-info {
+        .image-label {
+          padding: 10px;
+          background: #333;
+          width: 100%;
+          text-align: center;
+          font-size: 14px;
+          color: #e0e0e0;
+        }
+
+        .streamer-info-card {
           background: #252525;
           border-radius: 8px;
           padding: 16px;
-          display: flex;
-          flex-direction: column;
-          gap: 12px;
+          margin-bottom: 20px;
+        }
+
+        .streamer-info-card h4 {
+          margin: 0 0 16px 0;
+          font-size: 18px;
+          color: #e0e0e0;
         }
 
         .info-item {
           display: flex;
           align-items: center;
+          margin-bottom: 12px;
         }
 
         .info-label {
@@ -595,10 +658,34 @@ const NotificationsPage = () => {
 
         .info-value {
           flex: 1;
+          color: #e0e0e0;
+        }
+
+        .detected-objects {
+          background: #252525;
+          border-radius: 8px;
+          padding: 16px;
+        }
+
+        .detected-objects h4 {
+          margin: 0 0 16px 0;
+          font-size: 18px;
+          color: #e0e0e0;
+        }
+
+        .detection-item {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 12px;
+        }
+
+        .detection-class {
+          font-weight: 500;
+          color: #e0e0e0;
         }
 
         .confidence-badge {
-          display: inline-block;
           padding: 4px 8px;
           border-radius: 12px;
           font-weight: 500;
@@ -635,7 +722,10 @@ const NotificationsPage = () => {
           background: #2563eb;
         }
 
-        .empty-detail, .empty-state, .loading-container, .error-message {
+        .empty-detail,
+        .empty-state,
+        .loading-container,
+        .error-message {
           height: 100%;
           display: flex;
           flex-direction: column;
@@ -663,8 +753,12 @@ const NotificationsPage = () => {
         }
 
         @keyframes spin {
-          0% { transform: rotate(0deg); }
-          100% { transform: rotate(360deg); }
+          0% {
+            transform: rotate(0deg);
+          }
+          100% {
+            transform: rotate(360deg);
+          }
         }
 
         .error-message {
@@ -695,12 +789,13 @@ const NotificationsPage = () => {
             align-items: stretch;
           }
 
-          .filter-controls, .action-controls {
+          .filter-controls,
+          .action-controls {
             justify-content: space-between;
           }
 
-          .detection-image-container {
-            margin-bottom: 20px;
+          .image-gallery {
+            flex-direction: column;
           }
         }
       `}</style>

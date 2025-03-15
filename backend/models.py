@@ -7,17 +7,17 @@ class User(db.Model):
     """
     __tablename__ = "users"
     id = db.Column(db.Integer, primary_key=True)
-    username = db.Column(db.String(80), unique=True, nullable=False)
-    email = db.Column(db.String(120), unique=True, nullable=False)
+    username = db.Column(db.String(80), unique=True, nullable=False, index=True)
+    email = db.Column(db.String(120), unique=True, nullable=False, index=True)
     firstname = db.Column(db.String(80), nullable=False)
     lastname = db.Column(db.String(80), nullable=False)
     phonenumber = db.Column(db.String(20), nullable=False)
-    staffid = db.Column(db.String(20))
+    staffid = db.Column(db.String(20), index=True)
     password = db.Column(db.String(120), nullable=False)
-    role = db.Column(db.String(10), nullable=False, default="agent")
+    role = db.Column(db.String(10), nullable=False, default="agent", index=True)
 
     # Relationship with Assignment
-    assignments = db.relationship('Assignment', back_populates='agent', lazy=True)
+    assignments = db.relationship('Assignment', back_populates='agent', lazy='selectin')
 
     def serialize(self):
         """Serialize the User model into a dictionary."""
@@ -39,12 +39,12 @@ class Stream(db.Model):
     """
     __tablename__ = "streams"
     id = db.Column(db.Integer, primary_key=True)
-    room_url = db.Column(db.String(300), unique=True, nullable=False)
-    streamer_username = db.Column(db.String(100))
-    type = db.Column(db.String(50))  # Discriminator column for polymorphic identity
+    room_url = db.Column(db.String(300), unique=True, nullable=False, index=True)
+    streamer_username = db.Column(db.String(100), index=True)
+    type = db.Column(db.String(50), index=True)  # Discriminator column for polymorphic identity
 
     # Relationship with Assignment
-    assignments = db.relationship('Assignment', back_populates='stream', lazy=True)
+    assignments = db.relationship('Assignment', back_populates='stream', lazy='selectin')
 
     __mapper_args__ = {
         'polymorphic_on': type,
@@ -67,7 +67,7 @@ class ChaturbateStream(Stream):
     """
     __tablename__ = "chaturbate_streams"
     id = db.Column(db.Integer, db.ForeignKey("streams.id"), primary_key=True)
-    chaturbate_m3u8_url = db.Column(db.String(300), nullable=True)
+    chaturbate_m3u8_url = db.Column(db.String(300), nullable=True, index=True)
 
     __mapper_args__ = {
         'polymorphic_identity': 'chaturbate'
@@ -89,7 +89,7 @@ class StripchatStream(Stream):
     """
     __tablename__ = "stripchat_streams"
     id = db.Column(db.Integer, db.ForeignKey("streams.id"), primary_key=True)
-    stripchat_m3u8_url = db.Column(db.String(300), nullable=True)
+    stripchat_m3u8_url = db.Column(db.String(300), nullable=True, index=True)
 
     __mapper_args__ = {
         'polymorphic_identity': 'stripchat'
@@ -110,13 +110,17 @@ class Assignment(db.Model):
     """
     __tablename__ = "assignments"
     id = db.Column(db.Integer, primary_key=True)
-    agent_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
-    stream_id = db.Column(db.Integer, db.ForeignKey('streams.id'), nullable=False)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    agent_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
+    stream_id = db.Column(db.Integer, db.ForeignKey('streams.id'), nullable=False, index=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
 
     # Relationships
     agent = db.relationship('User', back_populates='assignments')
     stream = db.relationship('Stream', back_populates='assignments')
+
+    __table_args__ = (
+        db.Index('idx_assignment_agent_stream', 'agent_id', 'stream_id'),
+    )
 
     def serialize(self):
         """Serialize the Assignment model into a dictionary."""
@@ -133,11 +137,16 @@ class Log(db.Model):
     """
     __tablename__ = "logs"
     id = db.Column(db.Integer, primary_key=True)
-    timestamp = db.Column(db.DateTime(timezone=True), default=datetime.utcnow)
-    room_url = db.Column(db.String(300))
-    event_type = db.Column(db.String(50))
+    timestamp = db.Column(db.DateTime(timezone=True), default=datetime.utcnow, index=True)
+    room_url = db.Column(db.String(300), index=True)
+    event_type = db.Column(db.String(50), index=True)
     details = db.Column(db.JSON)  # Stores detection details, images, etc.
-    read = db.Column(db.Boolean, default=False)
+    read = db.Column(db.Boolean, default=False, index=True)
+
+    __table_args__ = (
+        db.Index('idx_logs_room_event', 'room_url', 'event_type'),
+        db.Index('idx_logs_timestamp_read', 'timestamp', 'read'),
+    )
 
     def serialize(self):
         """Serialize the Log model into a dictionary."""
@@ -156,7 +165,7 @@ class ChatKeyword(db.Model):
     """
     __tablename__ = "chat_keywords"
     id = db.Column(db.Integer, primary_key=True)
-    keyword = db.Column(db.String(100), unique=True, nullable=False)
+    keyword = db.Column(db.String(100), unique=True, nullable=False, index=True)
 
     def serialize(self):
         """Serialize the ChatKeyword model into a dictionary."""
@@ -169,7 +178,7 @@ class FlaggedObject(db.Model):
     """
     __tablename__ = "flagged_objects"
     id = db.Column(db.Integer, primary_key=True)
-    object_name = db.Column(db.String(100), unique=True, nullable=False)
+    object_name = db.Column(db.String(100), unique=True, nullable=False, index=True)
     confidence_threshold = db.Column(db.Numeric(3, 2), default=0.8)
 
     def serialize(self):
@@ -186,8 +195,8 @@ class TelegramRecipient(db.Model):
     """
     __tablename__ = "telegram_recipients"
     id = db.Column(db.Integer, primary_key=True)
-    telegram_username = db.Column(db.String(50), unique=True, nullable=False)
-    chat_id = db.Column(db.String(50), nullable=False)
+    telegram_username = db.Column(db.String(50), unique=True, nullable=False, index=True)
+    chat_id = db.Column(db.String(50), nullable=False, index=True)
 
     def serialize(self):
         """Serialize the TelegramRecipient model into a dictionary."""

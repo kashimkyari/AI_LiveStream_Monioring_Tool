@@ -6,16 +6,21 @@ const FlagSettingsPage = () => {
   const [newChatKeyword, setNewChatKeyword] = useState('');
   const [keywordMsg, setKeywordMsg] = useState('');
   const [keywordError, setKeywordError] = useState('');
-  
+
   const [flaggedObjects, setFlaggedObjects] = useState([]);
   const [newFlaggedObject, setNewFlaggedObject] = useState('');
   const [objectMsg, setObjectMsg] = useState('');
   const [objectError, setObjectError] = useState('');
-  
+
   const [telegramRecipients, setTelegramRecipients] = useState([]);
   const [newTelegramUsername, setNewTelegramUsername] = useState('');
   const [newTelegramChatId, setNewTelegramChatId] = useState('');
 
+  const [telegramMessage, setTelegramMessage] = useState('');
+  const [telegramMsg, setTelegramMsg] = useState('');
+  const [telegramError, setTelegramError] = useState('');
+
+  // Fetch chat keywords
   const fetchKeywords = async () => {
     try {
       const res = await axios.get('/api/keywords');
@@ -25,6 +30,7 @@ const FlagSettingsPage = () => {
     }
   };
 
+  // Fetch flagged objects
   const fetchObjects = async () => {
     try {
       const res = await axios.get('/api/objects');
@@ -34,6 +40,7 @@ const FlagSettingsPage = () => {
     }
   };
 
+  // Fetch Telegram recipients
   const fetchTelegramRecipients = async () => {
     try {
       const res = await axios.get('/api/telegram_recipients');
@@ -49,6 +56,7 @@ const FlagSettingsPage = () => {
     fetchTelegramRecipients();
   }, []);
 
+  // Handle creating a new chat keyword
   const handleCreateKeyword = async () => {
     setKeywordError('');
     setKeywordMsg('');
@@ -66,6 +74,7 @@ const FlagSettingsPage = () => {
     }
   };
 
+  // Handle updating a chat keyword
   const handleUpdateKeyword = async (keywordId, currentKeyword) => {
     const newKeyword = prompt("Enter new keyword:", currentKeyword);
     if (newKeyword && newKeyword.trim() !== currentKeyword) {
@@ -78,6 +87,7 @@ const FlagSettingsPage = () => {
     }
   };
 
+  // Handle deleting a chat keyword
   const handleDeleteKeyword = async (keywordId) => {
     try {
       await axios.delete(`/api/keywords/${keywordId}`);
@@ -87,6 +97,7 @@ const FlagSettingsPage = () => {
     }
   };
 
+  // Handle creating a new flagged object
   const handleCreateObject = async () => {
     setObjectError('');
     setObjectMsg('');
@@ -104,6 +115,7 @@ const FlagSettingsPage = () => {
     }
   };
 
+  // Handle updating a flagged object
   const handleUpdateObject = async (objectId, currentName) => {
     const newName = prompt("Enter new object name:", currentName);
     if (newName && newName.trim() !== currentName) {
@@ -116,6 +128,7 @@ const FlagSettingsPage = () => {
     }
   };
 
+  // Handle deleting a flagged object
   const handleDeleteObject = async (objectId) => {
     try {
       await axios.delete(`/api/objects/${objectId}`);
@@ -125,11 +138,12 @@ const FlagSettingsPage = () => {
     }
   };
 
+  // Handle creating a new Telegram recipient
   const handleCreateTelegramRecipient = async () => {
     try {
       await axios.post('/api/telegram_recipients', {
         telegram_username: newTelegramUsername,
-        chat_id: newTelegramChatId
+        chat_id: newTelegramChatId,
       });
       fetchTelegramRecipients();
       setNewTelegramUsername('');
@@ -139,6 +153,7 @@ const FlagSettingsPage = () => {
     }
   };
 
+  // Handle deleting a Telegram recipient
   const handleDeleteTelegramRecipient = async (recipientId) => {
     try {
       await axios.delete(`/api/telegram_recipients/${recipientId}`);
@@ -148,9 +163,28 @@ const FlagSettingsPage = () => {
     }
   };
 
+  // Handle sending a message to all Telegram recipients
+  const handleSendTelegramMessage = async () => {
+    setTelegramError('');
+    setTelegramMsg('');
+    if (!telegramMessage.trim()) {
+      setTelegramError('Message is required.');
+      return;
+    }
+    try {
+      const res = await axios.post('/api/send-telegram-message', { message: telegramMessage });
+      setTelegramMsg(res.data.message);
+      setTelegramMessage('');
+    } catch (error) {
+      setTelegramError(error.response?.data.message || 'Error sending message.');
+    }
+  };
+
   return (
     <div className="tab-content">
       <h3>Flag Settings</h3>
+
+      {/* Chat Keywords Section */}
       <div className="flag-section">
         <h4>Chat Keywords</h4>
         <div className="form-container">
@@ -187,6 +221,7 @@ const FlagSettingsPage = () => {
         </table>
       </div>
 
+      {/* Flagged Objects Section */}
       <div className="flag-section">
         <h4>Flagged Objects</h4>
         <div className="form-container">
@@ -223,8 +258,9 @@ const FlagSettingsPage = () => {
         </table>
       </div>
 
+      {/* Telegram Recipients Section */}
       <div className="flag-section">
-        <h4>Telegram Notifications</h4>
+        <h4>Telegram Recipients</h4>
         <div className="form-container">
           <input
             type="text"
@@ -264,15 +300,34 @@ const FlagSettingsPage = () => {
         </table>
       </div>
 
+      {/* Send Message to All Telegram Recipients Section */}
+      <div className="flag-section">
+        <h4>Send Message to All Telegram Recipients</h4>
+        <div className="form-container">
+          <textarea
+            placeholder="Enter your message here"
+            value={telegramMessage}
+            onChange={(e) => setTelegramMessage(e.target.value)}
+            rows={5}
+          />
+          <button onClick={handleSendTelegramMessage}>Send Message to All Telegram Users</button>
+        </div>
+        {telegramError && <div className="error">{telegramError}</div>}
+        {telegramMsg && <div className="message">{telegramMsg}</div>}
+      </div>
+
+      {/* Styles */}
       <style jsx>{`
         .tab-content {
           margin-top: 25px;
           animation: fadeIn 0.4s ease;
         }
 
-        @keyframes fadeIn {
-          from { opacity: 0; transform: translateY(10px); }
-          to { opacity: 1; transform: translateY(0); }
+        .flag-section {
+          margin-bottom: 40px;
+          background: #252525;
+          padding: 20px;
+          border-radius: 12px;
         }
 
         .form-container {
@@ -282,39 +337,35 @@ const FlagSettingsPage = () => {
           margin-bottom: 20px;
         }
 
-        .form-container input, 
-        .form-container select {
-          padding: 12px 18px;
+        input, textarea {
+          padding: 12px;
           background: #2d2d2d;
           border: 1px solid #3d3d3d;
           border-radius: 8px;
-          flex: 1;
           color: #e0e0e0;
-          transition: all 0.3s ease;
-          min-width: 200px;
+          font-family: inherit;
+          font-size: 14px;
+          flex: 1;
         }
 
-        .form-container input:focus, 
-        .form-container select:focus {
-          border-color: #007bff;
-          box-shadow: 0 0 10px rgba(0,123,255,0.3);
-          outline: none;
+        textarea {
+          width: 100%;
+          resize: vertical;
         }
 
-        .form-container button {
+        button {
           padding: 12px 24px;
-          background: linear-gradient(135deg, #007bff, #0056b3);
-          color: #fff;
+          background: #007bff;
+          color: white;
           border: none;
           border-radius: 8px;
           cursor: pointer;
-          transition: all 0.3s ease;
-          font-weight: 500;
+          font-size: 14px;
+          transition: background 0.3s ease;
         }
 
-        .form-container button:hover {
-          transform: translateY(-2px);
-          box-shadow: 0 5px 15px rgba(0,123,255,0.3);
+        button:hover {
+          background: #0056b3;
         }
 
         table {
@@ -339,58 +390,12 @@ const FlagSettingsPage = () => {
 
         .error {
           color: #ff4444;
-          background: #ff444410;
-          padding: 12px;
-          border-radius: 8px;
-          border: 1px solid #ff444430;
-          margin: 15px 0;
-          animation: shake 0.4s ease;
-        }
-
-        @keyframes shake {
-          0%, 100% { transform: translateX(0); }
-          25% { transform: translateX(-8px); }
-          75% { transform: translateX(8px); }
+          margin-top: 10px;
         }
 
         .message {
           color: #28a745;
-          background: #28a74510;
-          padding: 12px;
-          border-radius: 8px;
-          border: 1px solid #28a74530;
-          margin: 15px 0;
-        }
-
-        .flag-section {
-          margin-bottom: 40px;
-          background: #252525;
-          padding: 20px;
-          border-radius: 12px;
-        }
-
-        button {
-          transition: all 0.3s ease;
-          border: none;
-          background: #007bff;
-          color: white;
-          padding: 8px 16px;
-          border-radius: 6px;
-        }
-
-        button:hover {
-          filter: brightness(1.1);
-          transform: translateY(-2px);
-        }
-
-        button:active {
-          transform: translateY(1px);
-        }
-
-        @media (max-width: 768px) {
-          .form-container {
-            flex-direction: column;
-          }
+          margin-top: 10px;
         }
       `}</style>
     </div>
