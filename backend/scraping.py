@@ -29,6 +29,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from seleniumwire import webdriver
 from selenium.webdriver.chrome.options import Options
+import random 
 
 # Global dictionary to hold scraping job statuses.
 scrape_jobs = {}
@@ -47,61 +48,67 @@ def read_proxies(file_path):
         proxies = [line.strip() for line in file if line.strip()]
     return proxies
 
-def fetch_m3u8_from_page(url, timeout=90, max_retries=3):
+def fetch_m3u8_from_page(url, timeout=90):
+    # Path to the SOCKS5 proxies file
     proxies_file = os.path.join(os.path.dirname(__file__), 'socks5.txt')
     proxies = read_proxies(proxies_file)
 
     if not proxies:
         raise ValueError("No proxies found in the file.")
 
-    for attempt in range(max_retries):
-        proxy = random.choice(proxies)
-        proxy_host, proxy_port = proxy.split(':')
+    # Randomly select a proxy from the list
+    proxy = random.choice(proxies)
+    proxy_host, proxy_port = proxy.split(':')
 
-        seleniumwire_options = {
-            'proxy': {
-                'http': f'socks5://{proxy_host}:{proxy_port}',
-                'https': f'socks5://{proxy_host}:{proxy_port}',
-                'no_proxy': 'localhost,127.0.0.1'
-            }
+    # Configure Selenium WebDriver with the selected proxy
+    chrome_options = Options()
+    chrome_options.add_argument("--headless")
+    chrome_options.add_argument("--disable-gpu")
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+
+    # Set up Selenium Wire options for SOCKS5 proxy
+    seleniumwire_options = {
+        'proxy': {
+            'http': f'socks5://{proxy_host}:{proxy_port}',
+            'https': f'socks5://{proxy_host}:{proxy_port}',
+            'no_proxy': 'localhost,127.0.0.1'
         }
+    }
 
-        try:
-            driver = webdriver.Chrome(
-                options=chrome_options,
-                seleniumwire_options=seleniumwire_options
-            )
-            driver.scopes = ['.*\\.m3u8']
+    driver = webdriver.Chrome(
+        options=chrome_options,
+        seleniumwire_options=seleniumwire_options
+    )
+    driver.scopes = ['.*\\.m3u8']
 
-            logging.info(f"Attempt {attempt + 1}: Opening URL: {url} using proxy: {proxy}")
-            driver.get(url)
-            time.sleep(5)
+    try:
+        logging.info(f"Opening URL: {url} using proxy: {proxy}")
+        driver.get(url)
+        time.sleep(5)  # Allow page to load network requests.
 
-            found_url = None
-            elapsed = 0
+        found_url = None
+        elapsed = 0
 
-            while elapsed < timeout:
-                for request in driver.requests:
-                    if request.response and ".m3u8" in request.url:
-                        found_url = request.url
-                        logging.info(f"Found M3U8 URL: {found_url}")
-                        break
-                if found_url:
+        while elapsed < timeout:
+            for request in driver.requests:
+                if request.response and ".m3u8" in request.url:
+                    found_url = request.url
+                    logging.info(f"Found M3U8 URL: {found_url}")
                     break
-                time.sleep(1)
-                elapsed += 1
+            if found_url:
+                break
+            time.sleep(1)
+            elapsed += 1
 
-            return found_url if found_url else None
+        return found_url if found_url else None
 
-        except Exception as e:
-            logging.error(f"Attempt {attempt + 1} failed: {e}")
-            if attempt < max_retries - 1:
-                logging.info("Retrying with a different proxy...")
-            else:
-                return None
+    except Exception as e:
+        logging.error(f"Error fetching M3U8 URL: {e}")
+        return None
 
-        finally:
-            driver.quit()
+    finally:
+        driver.quit()
 
 
 def scrape_chaturbate_data(url, progress_callback=None):
