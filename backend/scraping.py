@@ -2,6 +2,7 @@ import sys
 import types
 import tempfile  # New import for generating unique user-data directories
 import os
+import random
 
 # --- Monkey Patch for blinker._saferef ---
 if 'blinker._saferef' not in sys.modules:
@@ -29,7 +30,19 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from seleniumwire import webdriver
 from selenium.webdriver.chrome.options import Options
-import random 
+
+# Configure logging to output to the terminal.
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    handlers=[logging.StreamHandler()]
+)
+
+def read_proxies(file_path):
+    """Read SOCKS5 proxies from a file."""
+    with open(file_path, 'r') as file:
+        proxies = [line.strip() for line in file if line.strip()]
+    return proxies
 
 # Global dictionary to hold scraping job statuses.
 scrape_jobs = {}
@@ -41,12 +54,6 @@ def update_job_progress(job_id, percent, message):
         "message": message,
     }
     logging.info("Job %s progress: %s%% - %s", job_id, percent, message)
-
-def read_proxies(file_path):
-    """Read SOCKS5 proxies from a file."""
-    with open(file_path, 'r') as file:
-        proxies = [line.strip() for line in file if line.strip()]
-    return proxies
 
 def fetch_m3u8_from_page(url, timeout=90):
     # Path to the SOCKS5 proxies file
@@ -109,7 +116,6 @@ def fetch_m3u8_from_page(url, timeout=90):
 
     finally:
         driver.quit()
-
 
 def scrape_chaturbate_data(url, progress_callback=None):
     try:
