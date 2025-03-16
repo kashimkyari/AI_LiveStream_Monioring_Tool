@@ -1,6 +1,16 @@
 #!/usr/bin/env python
 import sys
 import types
+import tempfile  # For generating unique user-data directories
+import os
+import logging
+import time
+import uuid
+from concurrent.futures import ThreadPoolExecutor
+from seleniumwire import webdriver
+from selenium.webdriver.chrome.options import Options
+from flask import Flask, request, jsonify
+
 # --- Monkey Patch for blinker._saferef (must be at the very top) ---
 if 'blinker._saferef' not in sys.modules:
     import weakref
@@ -19,15 +29,6 @@ if 'blinker._saferef' not in sys.modules:
     saferef.SafeRef = SafeRef
     sys.modules["blinker._saferef"] = saferef
 # --- End of Monkey Patch ---
-
-import tempfile  # For generating unique user-data directories
-import os
-import random
-import logging
-import time
-from concurrent.futures import ThreadPoolExecutor
-from seleniumwire import webdriver
-from selenium.webdriver.chrome.options import Options
 
 # Configure logging to output to the terminal.
 logging.basicConfig(
@@ -49,42 +50,42 @@ def update_job_progress(job_id, percent, message):
 
 def fetch_m3u8_from_page(url, timeout=90):
     """
-    Attempt to fetch the .m3u8 URL from the page using the fixed AWS EC2 proxy.
-    This proxy is set to the EC2 instance EIP "54.86.99.85" on port 80.
+    Attempt to fetch the .m3u8 URL from the page using a direct connection.
+    Stealth tweaks are applied to reduce blockages:
+      - Running in non-headless mode (since headless browsers are often flagged)
+      - A standard user agent is used.
+      - The AutomationControlled flag is disabled.
+      - A temporary user-data directory is used.
     """
-    # Fixed proxy based on your AWS EC2 instance EIP.
-    fixed_proxy = "http://54.86.99.85:80"
-    logging.info("Using fixed proxy: %s", fixed_proxy)
-    
-    seleniumwire_options = {
-        'proxy': {
-            'http': fixed_proxy,
-            'https': fixed_proxy,
-            'no_proxy': 'localhost,127.0.0.1'
-        }
-    }
-    
     chrome_options = Options()
-    chrome_options.add_argument("--headless")
+    # Running in non-headless mode (remove headless flag)
+    # Uncomment the next line to run headless if necessary.
+    # chrome_options.add_argument("--headless")
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
-    
+    # Stealth tweaks
+    chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+    chrome_options.add_argument("start-maximized")
+    chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                                "Chrome/134.0.0.0 Safari/537.36")
+    unique_user_data_dir = tempfile.mkdtemp()
+    chrome_options.add_argument(f"--user-data-dir={unique_user_data_dir}")
+
+    driver = webdriver.Chrome(options=chrome_options)
+    # Capture only .m3u8 requests.
+    driver.scopes = ['.*\\.m3u8']
+
     try:
-        driver = webdriver.Chrome(
-            options=chrome_options,
-            seleniumwire_options=seleniumwire_options
-        )
-        # Limit captured requests to those ending with .m3u8.
-        driver.scopes = ['.*\\.m3u8']
-        logging.info("Opening URL: %s using fixed proxy: %s", url, fixed_proxy)
+        logging.info("Opening URL: %s", url)
         driver.get(url)
-        time.sleep(5)  # Allow the page to load network requests.
-        
+        time.sleep(5)  # Allow page to load network requests.
+
         found_url = None
         elapsed = 0
         logged_requests = set()
-        
+
         while elapsed < timeout:
             for request in driver.requests:
                 if request.url not in logged_requests:
@@ -98,18 +99,17 @@ def fetch_m3u8_from_page(url, timeout=90):
                 break
             time.sleep(1)
             elapsed += 1
-        driver.quit()
+
         if not found_url:
             logging.error("Timeout reached after %s seconds without finding a .m3u8 URL", timeout)
         return found_url if found_url else None
 
     except Exception as e:
-        logging.error("Error fetching M3U8 URL using fixed proxy %s: %s", fixed_proxy, e)
-        try:
-            driver.quit()
-        except Exception:
-            pass
+        logging.error("Error fetching M3U8 URL: %s", e)
         return None
+
+    finally:
+        driver.quit()
 
 def scrape_chaturbate_data(url, progress_callback=None):
     try:
@@ -130,6 +130,7 @@ def scrape_chaturbate_data(url, progress_callback=None):
         if progress_callback:
             progress_callback(100, "Scraping complete")
         return result
+
     except Exception as e:
         logging.error("Error scraping Chaturbate URL %s: %s", url, e)
         if progress_callback:
@@ -157,6 +158,7 @@ def scrape_stripchat_data(url, progress_callback=None):
         if progress_callback:
             progress_callback(100, "Scraping complete")
         return result
+
     except Exception as e:
         logging.error("Error scraping Stripchat URL %s: %s", url, e)
         if progress_callback:
@@ -172,8 +174,29 @@ def run_scrape_job(job_id, url):
     else:
         logging.error("Unsupported platform for URL: %s", url)
         result = None
+
     if result:
         scrape_jobs[job_id]["result"] = result
     else:
         scrape_jobs[job_id]["error"] = "Scraping failed"
     update_job_progress(job_id, 100, scrape_jobs[job_id].get("error", "Scraping complete"))
+    return scrape_jobs[job_id]
+
+# Flask application to handle stream addition from the frontend.
+app = Flask(__name__)
+
+@app.route('/api/streams', methods=['POST'])
+def add_stream():
+    data = request.get_json()
+    if not data or "url" not in data:
+        return jsonify({"error": "No URL provided"}), 400
+
+    url = data["url"]
+    job_id = str(uuid.uuid4())
+    # Run the scrape job synchronously.
+    result = run_scrape_job(job_id, url)
+    if "error" in result:
+        return jsonify({"error": result["error"]}), 500
+    return jsonify(result["result"]), 200
+
+
