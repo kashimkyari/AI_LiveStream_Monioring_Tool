@@ -36,25 +36,6 @@ logging.basicConfig(
     handlers=[logging.StreamHandler()]
 )
 
-def read_proxies(file_path):
-    """
-    Read proxies from a file.
-    Expected file format (socks5.txt):
-      http://27.72.244.228:8080
-      http://203.150.172.151:8080
-      http://181.129.183.19:53281
-      http://31.131.135.247:8080
-      http://122.2.28.114:8080
-      http://77.238.79.111:8080
-      http://36.91.68.149:8080
-      http://180.180.123.40:8080
-      http://182.253.140.250:8080
-      http://61.29.96.146:80
-    """
-    with open(file_path, 'r') as file:
-        proxies = [line.strip() for line in file if line.strip()]
-    return proxies
-
 # Global dictionary to hold scraping job statuses.
 scrape_jobs = {}
 executor = ThreadPoolExecutor(max_workers=5)  # Thread pool for parallel scraping
@@ -68,77 +49,67 @@ def update_job_progress(job_id, percent, message):
 
 def fetch_m3u8_from_page(url, timeout=90):
     """
-    Attempt to fetch the .m3u8 URL from the page using HTTP proxies.
-    Proxies are read from socks5.txt, shuffled, and tried one-by-one.
+    Attempt to fetch the .m3u8 URL from the page using the fixed AWS EC2 proxy.
+    This proxy is set to the EC2 instance EIP "54.86.99.85" on port 80.
     """
-    proxies_file = os.path.join(os.path.dirname(__file__), 'socks5.txt')
-    proxies = read_proxies(proxies_file)
-    if not proxies:
-        raise ValueError("No proxies found in socks5.txt")
+    # Fixed proxy based on your AWS EC2 instance EIP.
+    fixed_proxy = "http://54.86.99.85:80"
+    logging.info("Using fixed proxy: %s", fixed_proxy)
     
-    random.shuffle(proxies)
-    
-    for proxy in proxies:
-        # Assume proxy string already includes "http://"
-        selected_proxy = proxy
-        logging.info("Trying proxy: %s", selected_proxy)
-        
-        seleniumwire_options = {
-            'proxy': {
-                'http': selected_proxy,
-                'https': selected_proxy,
-                'no_proxy': 'localhost,127.0.0.1'
-            }
+    seleniumwire_options = {
+        'proxy': {
+            'http': fixed_proxy,
+            'https': fixed_proxy,
+            'no_proxy': 'localhost,127.0.0.1'
         }
+    }
+    
+    chrome_options = Options()
+    chrome_options.add_argument("--headless")
+    chrome_options.add_argument("--disable-gpu")
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    
+    try:
+        driver = webdriver.Chrome(
+            options=chrome_options,
+            seleniumwire_options=seleniumwire_options
+        )
+        # Limit captured requests to those ending with .m3u8.
+        driver.scopes = ['.*\\.m3u8']
+        logging.info("Opening URL: %s using fixed proxy: %s", url, fixed_proxy)
+        driver.get(url)
+        time.sleep(5)  # Allow the page to load network requests.
         
-        chrome_options = Options()
-        chrome_options.add_argument("--headless")
-        chrome_options.add_argument("--disable-gpu")
-        chrome_options.add_argument("--no-sandbox")
-        chrome_options.add_argument("--disable-dev-shm-usage")
+        found_url = None
+        elapsed = 0
+        logged_requests = set()
         
-        try:
-            driver = webdriver.Chrome(
-                options=chrome_options,
-                seleniumwire_options=seleniumwire_options
-            )
-            # Limit captured requests to those ending with .m3u8.
-            driver.scopes = ['.*\\.m3u8']
-            logging.info("Opening URL: %s using proxy: %s", url, selected_proxy)
-            driver.get(url)
-            time.sleep(5)  # Allow the page to load network requests.
-            
-            found_url = None
-            elapsed = 0
-            logged_requests = set()
-            
-            while elapsed < timeout:
-                for request in driver.requests:
-                    if request.url not in logged_requests:
-                        logging.info("Captured request: %s", request.url)
-                        logged_requests.add(request.url)
-                    if request.response and ".m3u8" in request.url:
-                        found_url = request.url
-                        logging.info("Found M3U8 URL: %s", found_url)
-                        break
-                if found_url:
+        while elapsed < timeout:
+            for request in driver.requests:
+                if request.url not in logged_requests:
+                    logging.info("Captured request: %s", request.url)
+                    logged_requests.add(request.url)
+                if request.response and ".m3u8" in request.url:
+                    found_url = request.url
+                    logging.info("Found M3U8 URL: %s", found_url)
                     break
-                time.sleep(1)
-                elapsed += 1
-            driver.quit()
             if found_url:
-                return found_url
-            else:
-                logging.error("Timeout reached after %s seconds with proxy %s without finding a .m3u8 URL", timeout, selected_proxy)
-        except Exception as e:
-            logging.error("Error with proxy %s: %s", selected_proxy, e)
-            try:
-                driver.quit()
-            except Exception:
-                pass
-            # Try the next proxy
-    logging.error("All proxies failed or timeout reached without finding a .m3u8 URL")
-    return None
+                break
+            time.sleep(1)
+            elapsed += 1
+        driver.quit()
+        if not found_url:
+            logging.error("Timeout reached after %s seconds without finding a .m3u8 URL", timeout)
+        return found_url if found_url else None
+
+    except Exception as e:
+        logging.error("Error fetching M3U8 URL using fixed proxy %s: %s", fixed_proxy, e)
+        try:
+            driver.quit()
+        except Exception:
+            pass
+        return None
 
 def scrape_chaturbate_data(url, progress_callback=None):
     try:
