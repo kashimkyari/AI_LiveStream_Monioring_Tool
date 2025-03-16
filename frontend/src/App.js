@@ -22,11 +22,28 @@ function App() {
   const [toast, setToast] = useState(null);
   const [notifications, setNotifications] = useState([]);
   const [dashboardData, setDashboardData] = useState({ streams: [] });
-  
+  const [isMobile, setIsMobile] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   
   // Cookie sharing state
   const [cookieSubmitted, setCookieSubmitted] = useState(false);
   const [showCookieModal, setShowCookieModal] = useState(false);
+
+  // Check if device is mobile
+  useEffect(() => {
+    const checkMobile = () => {
+      setIsMobile(window.innerWidth <= 768);
+    };
+    
+    // Initial check
+    checkMobile();
+    
+    // Add event listener for resize
+    window.addEventListener('resize', checkMobile);
+    
+    // Cleanup
+    return () => window.removeEventListener('resize', checkMobile);
+  }, []);
 
   const checkSession = async () => {
     try {
@@ -140,6 +157,7 @@ function App() {
     try {
       await axios.post('/api/logout');
       setRole(null);
+      setMenuOpen(false);
     } catch (err) {
       console.error("Logout error", err);
     }
@@ -176,6 +194,20 @@ function App() {
   const handleNotificationClick = () => {
     setActiveTab('notifications');
     setUnreadCount(0);
+    if (isMobile) {
+      setMenuOpen(false);
+    }
+  };
+
+  const handleTabClick = (tab) => {
+    setActiveTab(tab);
+    if (isMobile) {
+      setMenuOpen(false);
+    }
+  };
+
+  const toggleMenu = () => {
+    setMenuOpen(!menuOpen);
   };
 
   // Notification management functions
@@ -238,13 +270,24 @@ function App() {
       {role && (
         <header className="app-header">
           <div className="nav-container">
-            {role === 'admin' && (
-              <nav className="admin-nav">
-                <button onClick={() => setActiveTab('dashboard')} className={activeTab === 'dashboard' ? 'active' : ''}>Dashboard</button>
-                <button onClick={() => setActiveTab('assign')} className={activeTab === 'assign' ? 'active' : ''}>Assignments</button>
-                <button onClick={() => setActiveTab('agents')} className={activeTab === 'agents' ? 'active' : ''}>Agents</button>
-                <button onClick={() => setActiveTab('streams')} className={activeTab === 'streams' ? 'active' : ''}>Streams</button>
-                <button onClick={() => setActiveTab('flag')} className={activeTab === 'flag' ? 'active' : ''}>Settings</button>
+            {/* Mobile menu toggle button */}
+            {isMobile && role === 'admin' && (
+              <button className="menu-toggle" onClick={toggleMenu}>
+                {menuOpen ? '✕' : '☰'}
+                {unreadCount > 0 && !menuOpen && (
+                  <span className="mobile-notification-badge">{unreadCount}</span>
+                )}
+              </button>
+            )}
+            
+            {/* Admin navigation */}
+            {role === 'admin' && (!isMobile || (isMobile && menuOpen)) && (
+              <nav className={`admin-nav ${isMobile ? 'mobile-nav' : ''}`}>
+                <button onClick={() => handleTabClick('dashboard')} className={activeTab === 'dashboard' ? 'active' : ''}>Dashboard</button>
+                <button onClick={() => handleTabClick('assign')} className={activeTab === 'assign' ? 'active' : ''}>Assignments</button>
+                <button onClick={() => handleTabClick('agents')} className={activeTab === 'agents' ? 'active' : ''}>Agents</button>
+                <button onClick={() => handleTabClick('streams')} className={activeTab === 'streams' ? 'active' : ''}>Streams</button>
+                <button onClick={() => handleTabClick('flag')} className={activeTab === 'flag' ? 'active' : ''}>Settings</button>
                 <button 
                   onClick={handleNotificationClick} 
                   className={activeTab === 'notifications' ? 'active' : ''}
@@ -252,9 +295,18 @@ function App() {
                   Notifications
                   {unreadCount > 0 && <span className="notification-badge">{unreadCount}</span>}
                 </button>
+                
+                {/* Mobile logout button (inside menu) */}
+                {isMobile && (
+                  <button className="mobile-logout-button" onClick={handleLogout}>Logout</button>
+                )}
               </nav>
             )}
-            <button className="logout-button" onClick={handleLogout}>Logout</button>
+            
+            {/* Desktop logout button */}
+            {(!isMobile || role !== 'admin') && (
+              <button className="logout-button" onClick={handleLogout}>Logout</button>
+            )}
           </div>
         </header>
       )}
@@ -279,8 +331,8 @@ function App() {
       <div className="main-content">
         <Suspense fallback={<LoadingFallback />}>
           {!role && <Login onLogin={handleLogin} />}
-          {role === 'admin' && activeTab !== 'notifications' && activeTab !== 'hls-tester' && <AdminPanel activeTab={activeTab} />}
-          {role === 'agent' && <AgentDashboard />}
+          {role === 'admin' && activeTab !== 'notifications' && activeTab !== 'hls-tester' && <AdminPanel activeTab={activeTab} isMobile={isMobile} />}
+          {role === 'agent' && <AgentDashboard isMobile={isMobile} />}
           {role === 'admin' && activeTab === 'notifications' && (
             <NotificationsPage 
               notifications={notifications}
@@ -289,6 +341,7 @@ function App() {
               markAllAsRead={markAllAsRead}
               deleteNotification={deleteNotification}
               deleteAllNotifications={deleteAllNotifications}
+              isMobile={isMobile}
             />
           )}
         </Suspense>
@@ -296,7 +349,7 @@ function App() {
 
       {/* Toast notification */}
       {toast && (
-        <div className={`toast ${toast.type}`}>
+        <div className={`toast ${toast.type} ${isMobile ? 'mobile-toast' : ''}`}>
           {toast.image && (
             <img 
               src={toast.image} 
@@ -319,12 +372,20 @@ function App() {
       )}
 
       <style jsx global>{`
+        * {
+          box-sizing: border-box;
+        }
+        
         body {
           background: #121212;
           margin: 0;
           font-family: 'Inter', sans-serif;
           color: #e0e0e0;
+          -webkit-font-smoothing: antialiased;
+          -moz-osx-font-smoothing: grayscale;
+          overflow-x: hidden;
         }
+        
         /* Loading fallback styles */
         .loading-fallback {
           display: flex;
@@ -333,6 +394,7 @@ function App() {
           justify-content: center;
           height: 200px;
         }
+        
         .spinner {
           width: 40px;
           height: 40px;
@@ -342,10 +404,12 @@ function App() {
           animation: spin 1s linear infinite;
           margin-bottom: 16px;
         }
+        
         @keyframes spin {
           0% { transform: rotate(0deg); }
           100% { transform: rotate(360deg); }
         }
+        
         /* Modal styles */
         .modal-overlay {
           position: fixed;
@@ -359,6 +423,7 @@ function App() {
           justify-content: center;
           z-index: 3000;
         }
+        
         .modal {
           background: #1a1a1a;
           padding: 20px;
@@ -367,11 +432,13 @@ function App() {
           width: 90%;
           box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
         }
+        
         .modal-buttons {
           display: flex;
           justify-content: space-between;
           margin-top: 20px;
         }
+        
         .modal-buttons button {
           padding: 10px 20px;
           border: none;
@@ -379,10 +446,12 @@ function App() {
           cursor: pointer;
           font-weight: 500;
         }
+        
         .modal-buttons button:first-child {
           background: #007bff;
           color: #fff;
         }
+        
         .modal-buttons button:last-child {
           background: #444;
           color: #fff;
@@ -404,7 +473,7 @@ function App() {
           position: sticky;
           top: 0;
           z-index: 1000;
-          padding: 20px 40px;
+          padding: ${isMobile ? '12px 16px' : '20px 40px'};
           background: #1a1a1a;
           border-bottom: 1px solid #2d2d2d;
         }
@@ -415,17 +484,65 @@ function App() {
           align-items: center;
           max-width: 1200px;
           margin: 0 auto;
+          position: relative;
+        }
+
+        .menu-toggle {
+          padding: 8px;
+          background: #2d2d2d;
+          border: none;
+          border-radius: 6px;
+          color: #e0e0e0;
+          font-size: 1.2rem;
+          cursor: pointer;
+          position: relative;
+          z-index: 1010;
+        }
+
+        .mobile-notification-badge {
+          position: absolute;
+          top: -5px;
+          right: -5px;
+          background: #ff4444;
+          color: white;
+          width: 18px;
+          height: 18px;
+          border-radius: 50%;
+          font-size: 0.7em;
+          display: flex;
+          align-items: center;
+          justify-content: center;
         }
 
         .admin-nav {
           display: flex;
-          gap: 12px;
-          flex-wrap: wrap;
+          gap: ${isMobile ? '8px' : '12px'};
+          flex-wrap: ${isMobile ? 'nowrap' : 'wrap'};
           position: relative;
         }
 
+        .mobile-nav {
+          position: fixed;
+          top: 0;
+          left: 0;
+          right: 0;
+          bottom: 0;
+          background: #1a1a1a;
+          z-index: 1000;
+          padding: 60px 16px 16px;
+          display: flex;
+          flex-direction: column;
+          overflow-y: auto;
+          animation: fadeIn 0.3s ease;
+        }
+
+        @keyframes fadeIn {
+          from { opacity: 0; }
+          to { opacity: 1; }
+        }
+
         .admin-nav button {
-          padding: 12px 24px;
+          padding: ${isMobile ? '14px 12px' : '12px 24px'};
           border: none;
           background: #2d2d2d;
           border-radius: 8px;
@@ -435,6 +552,9 @@ function App() {
           font-weight: 500;
           position: relative;
           overflow: hidden;
+          width: ${isMobile ? '100%' : 'auto'};
+          margin-bottom: ${isMobile ? '8px' : '0'};
+          text-align: ${isMobile ? 'left' : 'center'};
         }
 
         .admin-nav button::before {
@@ -453,7 +573,7 @@ function App() {
         .admin-nav button:hover {
           background: #333;
           color: #fff;
-          transform: translateY(-2px);
+          transform: ${isMobile ? 'none' : 'translateY(-2px)'};
         }
 
         .admin-nav button.active::before {
@@ -474,6 +594,13 @@ function App() {
           align-items: center;
           justify-content: center;
           animation: pulse 1.5s infinite;
+        }
+
+        .mobile-logout-button {
+          margin-top: auto !important;
+          background: linear-gradient(135deg, #007bff, #0056b3) !important;
+          color: white !important;
+          font-weight: 500 !important;
         }
 
         @keyframes pulse {
@@ -500,8 +627,8 @@ function App() {
 
         .main-content {
           max-width: 1200px;
-          margin: 40px auto;
-          padding: 0 20px;
+          margin: ${isMobile ? '20px auto' : '40px auto'};
+          padding: 0 ${isMobile ? '12px' : '20px'};
         }
 
         .toast {
@@ -521,14 +648,24 @@ function App() {
           max-width: 400px;
         }
 
+        .mobile-toast {
+          bottom: 10px;
+          right: 10px;
+          left: 10px;
+          padding: 12px;
+          flex-direction: column;
+          max-width: none;
+        }
+
         .toast.alert {
           border-left: 4px solid #ff4444;
         }
 
         .toast-image {
-          width: 80px;
-          height: 60px;
+          width: ${isMobile ? '100%' : '80px'};
+          height: ${isMobile ? 'auto' : '60px'};
           border-radius: 4px;
+          margin-bottom: ${isMobile ? '8px' : '0'};
         }
 
         .toast-content {
@@ -538,6 +675,9 @@ function App() {
         .toast-details {
           font-size: 0.9em;
           margin-top: 8px;
+          display: ${isMobile ? 'grid' : 'block'};
+          grid-template-columns: repeat(2, 1fr);
+          gap: 4px;
         }
 
         .toast-progress {
@@ -557,36 +697,6 @@ function App() {
         @keyframes progress {
           from { width: 100%; }
           to { width: 0%; }
-        }
-
-        @media (max-width: 768px) {
-          .app-header {
-            padding: 15px;
-          }
-          
-          .admin-nav {
-            gap: 8px;
-          }
-          
-          .admin-nav button {
-            padding: 8px 16px;
-            font-size: 0.9em;
-          }
-          
-          .logout-button {
-            padding: 8px 16px;
-          }
-
-          .toast {
-            max-width: 300px;
-            padding: 12px;
-            flex-direction: column;
-          }
-
-          .toast-image {
-            width: 100%;
-            height: auto;
-          }
         }
       `}</style>
     </div>
