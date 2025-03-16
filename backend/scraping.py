@@ -153,10 +153,12 @@ def run_scrape_job(job_id, url):
             result = scrape_chaturbate_data(
                 url, 
                 lambda p, m: update_job_progress(job_id, p, m)
+            )
         elif "stripchat.com" in url:
             result = scrape_stripchat_data(
                 url,
                 lambda p, m: update_job_progress(job_id, p, m)
+            )
         else:
             raise ValueError("Unsupported platform")
             
