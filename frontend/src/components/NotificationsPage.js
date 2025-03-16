@@ -215,11 +215,7 @@ const NotificationsPage = () => {
               )}
             </div>
             <div className="streamer-info-card">
-              <h4>Streamer Information</h4>
-              <div className="info-item">
-                <span className="info-label">Streamer UID:</span>
-                <span className="info-value">{selectedNotification.details?.streamer_uid}</span>
-              </div>
+              
               <div className="info-item">
                 <span className="info-label">Streamer Name:</span>
                 <span className="info-value">{selectedNotification.details?.streamer_name}</span>

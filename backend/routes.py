@@ -165,6 +165,7 @@ def get_streams():
 @app.route("/api/streams", methods=["POST"])
 @login_required(role="admin")
 def create_stream():
+    """Create a new stream after scraping is complete."""
     data = request.get_json()
     room_url = data.get("room_url", "").strip().lower()
     platform = data.get("platform", "Chaturbate").strip()
@@ -182,7 +183,8 @@ def create_stream():
     if Stream.query.filter_by(room_url=room_url).first():
         return jsonify({"message": "Stream exists"}), 400
 
-    streamer_username = room_url.rstrip("/").split("/")[-1] 
+    streamer_username = room_url.rstrip("/").split("/")[-1]
+
     # Create stream based on platform by scraping for the m3u8 URL
     if platform.lower() == "chaturbate":
         scraped_data = scrape_chaturbate_data(room_url)
@@ -191,7 +193,7 @@ def create_stream():
 
         stream = ChaturbateStream(
             room_url=room_url,
-            streamer_username=streamer_username, 
+            streamer_username=streamer_username,
             type="chaturbate",
             chaturbate_m3u8_url=scraped_data["chaturbate_m3u8_url"],
         )
@@ -202,7 +204,7 @@ def create_stream():
 
         stream = StripchatStream(
             room_url=room_url,
-            streamer_username=streamer_username, 
+            streamer_username=streamer_username,
             type="stripchat",
             stripchat_m3u8_url=scraped_data["stripchat_m3u8_url"],
         )
@@ -298,21 +300,26 @@ def delete_stream(stream_id):
 @app.route("/api/scrape/stripchat", methods=["POST"])
 @login_required(role="admin")
 def scrape_stripchat_endpoint():
+    """Start a Stripchat scraping job."""
     data = request.get_json()
     url = data.get("room_url", "").strip().lower()
     if not url:
         return jsonify({"message": "Room URL required"}), 400
     if "stripchat.com/" not in url:
         return jsonify({"message": "Invalid Stripchat URL"}), 400
+
     job_id = str(uuid.uuid4())
     scrape_jobs[job_id] = {"progress": 0, "message": "Job created"}
-    import threading
+
+    # Start the scraping job in a separate thread
     threading.Thread(target=run_scrape_job, args=(job_id, url), daemon=True).start()
+
     return jsonify({"message": "Scrape job started", "job_id": job_id})
 
 @app.route("/api/scrape/progress/<job_id>", methods=["GET"])
 @login_required(role="admin")
 def get_scrape_progress(job_id):
+    """Get the progress of a scraping job."""
     job = scrape_jobs.get(job_id)
     if not job:
         return jsonify({"message": "Job ID not found"}), 404

@@ -3,9 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "dependencies": {
-    "@tensorflow-models/body-pix": "^2.2.1",
     "@tensorflow-models/coco-ssd": "^2.2.3",
-    "@tensorflow-models/handpose": "^0.1.0",
     "@tensorflow-models/speech-commands": "^0.5.4",
     "@tensorflow/tfjs": "^4.22.0",
     "axios": "^0.21.1",
@@ -17,7 +15,7 @@
   },
   "scripts": {
     "start": "serve -s app -l 8080",
-    "devstart": "export NODE_OPTIONS=--openssl-legacy-provider && react-scripts start",
+    "dev": "export NODE_OPTIONS=--openssl-legacy-provider && react-scripts start",
     "build": "export NODE_OPTIONS=--openssl-legacy-provider && react-scripts build"
   },
   "proxy": "http://localhost:5000",

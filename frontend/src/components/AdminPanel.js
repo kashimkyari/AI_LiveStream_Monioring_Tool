@@ -1,12 +1,30 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, lazy, Suspense } from 'react';
 import axios from 'axios';
 import VideoPlayer from './VideoPlayer';
-import ScraperPage from './ScraperPage';
-import VisualTestPage from './VisualTestPage';
-import AssignmentPage from './AssignmentPage';
-import StreamsPage from './StreamsPage';
-import FlagSettingsPage from './FlagSettingsPage';
-import AgentsPage from './AgentsPage'; // Import the AgentsPage component
+
+// Lazy load components
+const ScraperPage = lazy(() => import('./ScraperPage'));
+const VisualTestPage = lazy(() => import('./VisualTestPage'));
+const AssignmentPage = lazy(() => import('./AssignmentPage'));
+const StreamsPage = lazy(() => import('./StreamsPage'));
+const FlagSettingsPage = lazy(() => import('./FlagSettingsPage'));
+const AgentsPage = lazy(() => import('./AgentsPage'));
+
+// Loading fallback component
+const LoadingFallback = () => (
+  <div className="loading-container">
+    <p>Loading...</p>
+    <style jsx>{`
+      .loading-container {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        height: 200px;
+        color: #e0e0e0;
+      }
+    `}</style>
+  </div>
+);
 
 const AdminPanel = ({ activeTab }) => {
   const [dashboardData, setDashboardData] = useState({ ongoing_streams: 0, streams: [] });
@@ -70,62 +88,92 @@ const AdminPanel = ({ activeTab }) => {
 
   const closeModal = () => setSelectedAssignment(null);
 
-  return (
-    <div className="admin-panel">
-      {activeTab === 'dashboard' && (
-        <div className="tab-content">
-          <h3></h3>
-          <div className="dashboard-info">
-            <p><strong>Ongoing Streams:</strong> {dashboardData.ongoing_streams}</p>
-            <div className="assignment-grid">
-              {dashboardData.streams.map((stream) => (
-                <div key={stream.id} className="assignment-card" onClick={() => setSelectedAssignment(stream)}>
-                  <VideoPlayer
-                    platform={stream.platform.toLowerCase()}
-                    streamerUid={stream.streamer_uid}
-                    streamerName={stream.streamer_username}
-                    alerts={detectionAlerts[stream.room_url] || []}
-                  />
-                  {(detectionAlerts[stream.room_url]?.length > 0) && (
-                    <div className="detection-alert-badge">
-                      {detectionAlerts[stream.room_url].length} DETECTIONS
-                      <div className="detection-preview">
-                        <img 
-                          src={detectionAlerts[stream.room_url][0].image_url} 
-                          alt="Detection preview" 
-                          className="preview-image"
-                        />
-                        <div className="detection-info">
-                          <span>{detectionAlerts[stream.room_url][0].class} </span>
-                          <span>({(detectionAlerts[stream.room_url][0].confidence * 100).toFixed(1)}%)</span>
+
+  const renderTabContent = () => {
+    switch (activeTab) {
+      case 'dashboard':
+        return (
+          <div className="tab-content">
+            <h3></h3>
+            <div className="dashboard-info">
+              <p><strong>Ongoing Streams:</strong> {dashboardData.ongoing_streams}</p>
+              <div className="assignment-grid">
+                {dashboardData.streams.map((stream) => (
+                  <div key={stream.id} className="assignment-card" onClick={() => setSelectedAssignment(stream)}>
+                    <VideoPlayer
+                      platform={stream.platform.toLowerCase()}
+                      streamerUid={stream.streamer_uid}
+                      streamerName={stream.streamer_username}
+                      alerts={detectionAlerts[stream.room_url] || []}
+                    />
+                    {(detectionAlerts[stream.room_url]?.length > 0) && (
+                      <div className="detection-alert-badge">
+                        {detectionAlerts[stream.room_url].length} DETECTIONS
+                        <div className="detection-preview">
+                          <img 
+                            src={detectionAlerts[stream.room_url][0].image_url} 
+                            alt="Detection preview" 
+                            className="preview-image"
+                          />
+                          <div className="detection-info">
+                            <span>{detectionAlerts[stream.room_url][0].class} </span>
+                            <span>({(detectionAlerts[stream.room_url][0].confidence * 100).toFixed(1)}%)</span>
+                          </div>
                         </div>
                       </div>
+                    )}
+                    <div className="assignment-details">
+                      <p><strong>Stream:</strong> {stream.id}</p>
+                      <p><strong>Agent:</strong> {stream.agent?.username || 'Unassigned'}</p>
+                      <p><strong>Model:</strong> {stream.streamer_username}</p>
                     </div>
-                  )}
-                  <div className="assignment-details">
-                    <p><strong>Stream:</strong> {stream.id}</p>
-                    <p><strong>Agent:</strong> {stream.agent?.username || 'Unassigned'}</p>
-                    <p><strong>Model:</strong> {stream.streamer_username}</p>
                   </div>
-                </div>
-              ))}
+                ))}
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      case 'assign':
+        return (
+          <Suspense fallback={<LoadingFallback />}>
+            <AssignmentPage />
+          </Suspense>
+        );
+      case 'streams':
+        return (
+          <Suspense fallback={<LoadingFallback />}>
+            <StreamsPage />
+          </Suspense>
+        );
+      case 'flag':
+        return (
+          <Suspense fallback={<LoadingFallback />}>
+            <FlagSettingsPage />
+          </Suspense>
+        );
+      case 'agents':
+        return (
+          <Suspense fallback={<LoadingFallback />}>
+            <AgentsPage />
+          </Suspense>
+        );
+      case 'scraper':
+        return (
+          <Suspense fallback={<LoadingFallback />}>
+            <div className="tab-content">
+              <h3>Scraper</h3>
+              <ScraperPage />
+            </div>
+          </Suspense>
+        );
+      default:
+        return null;
+    }
+  };
 
-      {activeTab === 'assign' && <AssignmentPage />}
-      {activeTab === 'streams' && <StreamsPage />}
-      {activeTab === 'flag' && <FlagSettingsPage />}
-      {activeTab === 'agents' && <AgentsPage />} {/* Render AgentsPage when "Agents" tab is active */}
-      {activeTab === 'scraper' && (
-        <div className="tab-content">
-          <h3>Scraper</h3>
-          <ScraperPage />
-        </div>
-      )}
-
-     
+  return (
+    <div className="admin-panel">
+      {renderTabContent()}
 
       {selectedAssignment && (
         <div className="modal-overlay" onClick={closeModal}>

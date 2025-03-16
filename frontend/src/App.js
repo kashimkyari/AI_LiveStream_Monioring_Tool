@@ -1,10 +1,19 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, lazy, Suspense } from 'react';
 import axios from 'axios';
-import Login from './components/Login';
-import AdminPanel from './components/AdminPanel';
-import AgentDashboard from './components/AgentDashboard';
-import VideoPlayer from './components/VideoPlayer';
-import NotificationsPage from './components/NotificationsPage';
+
+// Lazy load components
+const Login = lazy(() => import('./components/Login'));
+const AdminPanel = lazy(() => import('./components/AdminPanel'));
+const AgentDashboard = lazy(() => import('./components/AgentDashboard'));
+const NotificationsPage = lazy(() => import('./components/NotificationsPage'));
+
+// Loading fallback component
+const LoadingFallback = () => (
+  <div className="loading-fallback">
+    <div className="spinner"></div>
+    <p>Loading...</p>
+  </div>
+);
 
 function App() {
   const [role, setRole] = useState(null);
@@ -13,6 +22,11 @@ function App() {
   const [toast, setToast] = useState(null);
   const [notifications, setNotifications] = useState([]);
   const [dashboardData, setDashboardData] = useState({ streams: [] });
+  
+  
+  // Cookie sharing state
+  const [cookieSubmitted, setCookieSubmitted] = useState(false);
+  const [showCookieModal, setShowCookieModal] = useState(false);
 
   const checkSession = async () => {
     try {
@@ -29,10 +43,37 @@ function App() {
     }
   };
 
+  // Helper to extract Chaturbate session cookie
+  const getChaturbateCookie = () => {
+    const name = "chaturbate_session=";
+    const decodedCookie = decodeURIComponent(document.cookie);
+    const cookiesArray = decodedCookie.split(";");
+    for (let cookie of cookiesArray) {
+      cookie = cookie.trim();
+      if (cookie.indexOf(name) === 0) {
+        return cookie.substring(name.length);
+      }
+    }
+    return "";
+  };
+
+  // Check session on mount
   useEffect(() => {
     checkSession();
   }, []);
 
+  // Show cookie modal if needed
+  useEffect(() => {
+    if (role && !cookieSubmitted) {
+      if (localStorage.getItem("cookieShared")) {
+        setCookieSubmitted(true);
+        return;
+      }
+      setShowCookieModal(true);
+    }
+  }, [role, cookieSubmitted]);
+
+  // Set up notification event source
   useEffect(() => {
     if (!role) return;
 
@@ -60,7 +101,7 @@ function App() {
 
         setNotifications(prev => [
           { 
-            id: Date.now().toString(), // Temporary ID for our notifications list
+            id: Date.now().toString(),
             message: notificationMessage,
             timestamp: new Date().toISOString(),
             image: data.image_url,
@@ -104,16 +145,42 @@ function App() {
     }
   };
 
+  // Cookie submission handler
+  const handleCookieSubmit = async () => {
+    const autoCookie = getChaturbateCookie();
+    if (autoCookie) {
+      try {
+        const res = await axios.post('/api/submit-session', {
+          cookie: autoCookie
+        });
+        console.log("Cookie submitted successfully:", res.data);
+        setCookieSubmitted(true);
+        localStorage.setItem("cookieShared", "true");
+        setShowCookieModal(false);
+      } catch (error) {
+        console.error("Error submitting cookie:", error);
+      }
+    } else {
+      console.error("No Chaturbate session cookie found in the browser.");
+      setCookieSubmitted(true);
+      setShowCookieModal(false);
+    }
+  };
+
+  const handleCookieDecline = () => {
+    setCookieSubmitted(true);
+    localStorage.setItem("cookieShared", "false");
+    setShowCookieModal(false);
+  };
+
   const handleNotificationClick = () => {
     setActiveTab('notifications');
     setUnreadCount(0);
   };
 
+  // Notification management functions
   const markAsRead = async (notificationId) => {
     try {
-      // In a real implementation, this would call the API
-      // await axios.put(`/api/notifications/${notificationId}`, { read: true });
-      
       setNotifications(notifications.map(notification => 
         notification.id === notificationId 
           ? { ...notification, read: true }
@@ -126,9 +193,6 @@ function App() {
 
   const markAllAsRead = async () => {
     try {
-      // In a real implementation, this would call the API
-      // await axios.put('/api/notifications/read-all');
-      
       setNotifications(notifications.map(notification => ({ ...notification, read: true })));
       setUnreadCount(0);
     } catch (error) {
@@ -138,9 +202,6 @@ function App() {
 
   const deleteNotification = async (notificationId) => {
     try {
-      // In a real implementation, this would call the API
-      // await axios.delete(`/api/notifications/${notificationId}`);
-      
       setNotifications(notifications.filter(notification => notification.id !== notificationId));
     } catch (error) {
       console.error('Error deleting notification:', error);
@@ -149,9 +210,6 @@ function App() {
 
   const deleteAllNotifications = async () => {
     try {
-      // In a real implementation, this would call the API
-      // await axios.delete('/api/notifications/delete-all');
-      
       setNotifications([]);
       setUnreadCount(0);
     } catch (error) {
@@ -161,9 +219,6 @@ function App() {
 
   const fetchNotifications = async (filter = 'all') => {
     try {
-      // Normally this would be an API call, but we'll use our local state
-      // In a real implementation: const res = await axios.get(`/api/notifications?filter=${filter}`);
-      
       if (filter === 'all') {
         return notifications;
       } else if (filter === 'unread') {
@@ -171,7 +226,6 @@ function App() {
       } else if (filter === 'detection') {
         return notifications.filter(n => n.type === 'detection');
       }
-      
       return notifications;
     } catch (error) {
       console.error('Error fetching notifications:', error);
@@ -198,30 +252,49 @@ function App() {
                   Notifications
                   {unreadCount > 0 && <span className="notification-badge">{unreadCount}</span>}
                 </button>
-                
               </nav>
             )}
             <button className="logout-button" onClick={handleLogout}>Logout</button>
           </div>
         </header>
       )}
-      
+
+      {/* Cookie sharing modal */}
+      {role && showCookieModal && (
+        <div className="modal-overlay">
+          <div className="modal">
+            <h2>Share Chaturbate Session</h2>
+            <p>
+              To bypass the consent wall when scraping Chaturbate, would you like to share your active session?
+              If you click "Yes," we will automatically retrieve your session cookie from your browser.
+            </p>
+            <div className="modal-buttons">
+              <button onClick={handleCookieSubmit}>Yes, share</button>
+              <button onClick={handleCookieDecline}>No, thanks</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="main-content">
-        {!role && <Login onLogin={handleLogin} />}
-        {role === 'admin' && activeTab !== 'notifications' && activeTab !== 'hls-tester' && <AdminPanel activeTab={activeTab} />}
-        {role === 'agent' && <AgentDashboard />}
-        {role === 'admin' && activeTab === 'notifications' && (
-          <NotificationsPage 
-            notifications={notifications}
-            fetchNotifications={fetchNotifications}
-            markAsRead={markAsRead}
-            markAllAsRead={markAllAsRead}
-            deleteNotification={deleteNotification}
-            deleteAllNotifications={deleteAllNotifications}
-          />
-        )}
+        <Suspense fallback={<LoadingFallback />}>
+          {!role && <Login onLogin={handleLogin} />}
+          {role === 'admin' && activeTab !== 'notifications' && activeTab !== 'hls-tester' && <AdminPanel activeTab={activeTab} />}
+          {role === 'agent' && <AgentDashboard />}
+          {role === 'admin' && activeTab === 'notifications' && (
+            <NotificationsPage 
+              notifications={notifications}
+              fetchNotifications={fetchNotifications}
+              markAsRead={markAsRead}
+              markAllAsRead={markAllAsRead}
+              deleteNotification={deleteNotification}
+              deleteAllNotifications={deleteAllNotifications}
+            />
+          )}
+        </Suspense>
       </div>
 
+      {/* Toast notification */}
       {toast && (
         <div className={`toast ${toast.type}`}>
           {toast.image && (
@@ -251,6 +324,68 @@ function App() {
           margin: 0;
           font-family: 'Inter', sans-serif;
           color: #e0e0e0;
+        }
+        /* Loading fallback styles */
+        .loading-fallback {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          height: 200px;
+        }
+        .spinner {
+          width: 40px;
+          height: 40px;
+          border: 4px solid rgba(0, 123, 255, 0.1);
+          border-radius: 50%;
+          border-left-color: #007bff;
+          animation: spin 1s linear infinite;
+          margin-bottom: 16px;
+        }
+        @keyframes spin {
+          0% { transform: rotate(0deg); }
+          100% { transform: rotate(360deg); }
+        }
+        /* Modal styles */
+        .modal-overlay {
+          position: fixed;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
+          background: rgba(0, 0, 0, 0.75);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 3000;
+        }
+        .modal {
+          background: #1a1a1a;
+          padding: 20px;
+          border-radius: 8px;
+          max-width: 500px;
+          width: 90%;
+          box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+        }
+        .modal-buttons {
+          display: flex;
+          justify-content: space-between;
+          margin-top: 20px;
+        }
+        .modal-buttons button {
+          padding: 10px 20px;
+          border: none;
+          border-radius: 4px;
+          cursor: pointer;
+          font-weight: 500;
+        }
+        .modal-buttons button:first-child {
+          background: #007bff;
+          color: #fff;
+        }
+        .modal-buttons button:last-child {
+          background: #444;
+          color: #fff;
         }
       `}</style>
 

@@ -4,7 +4,7 @@ import axios from 'axios';
 import '@tensorflow/tfjs';
 import * as cocoSsd from '@tensorflow-models/coco-ssd';
 
-const HlsPlayer = ({ m3u8Url, onDetection, isModalOpen }) => {
+const HlsPlayer = ({ m3u8Url, onDetection, isModalOpen, posterUrl }) => {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   
@@ -367,6 +367,7 @@ const HlsPlayer = ({ m3u8Url, onDetection, isModalOpen }) => {
         muted
         autoPlay
         playsInline
+        poster={posterUrl} // Add poster URL here
         style={{ width: '100%', height: '100%' }}
       />
 
@@ -510,6 +511,7 @@ const VideoPlayer = ({
   const [loading, setLoading] = useState(true);
   const [m3u8Url, setM3u8Url] = useState(null);
   const [fetchedStreamerUsername, setFetchedStreamerUsername] = useState(null);
+  const [posterUrl, setPosterUrl] = useState(null); // State for fallback poster URL
 
   // Fetch the m3u8 URL for both Chaturbate and Stripchat streams based on streamerName
   useEffect(() => {
@@ -529,6 +531,9 @@ const VideoPlayer = ({
         } catch (error) {
           console.error("Error fetching m3u8 URL for Chaturbate:", error);
           setIsOnline(false);
+          // Set fallback poster URL if the scrape fails
+          const fallbackPosterUrl = `https://jpeg.live.mmcdn.com/stream?room=${streamerName}&f=${Math.random()}`;
+          setPosterUrl(fallbackPosterUrl);
         } finally {
           setLoading(false);
         }
@@ -573,14 +578,14 @@ const VideoPlayer = ({
   const renderPlayer = (isModal) => {
     if (platform.toLowerCase() === 'stripchat') {
       return m3u8Url ? (
-        <HlsPlayer m3u8Url={m3u8Url} onDetection={onDetection} isModalOpen={isModal} />
+        <HlsPlayer m3u8Url={m3u8Url} onDetection={onDetection} isModalOpen={isModal} posterUrl={posterUrl} />
       ) : (
         <div className="error-message">No valid m3u8 URL provided for Stripchat.</div>
       );
     }
     if (platform.toLowerCase() === 'chaturbate') {
       return m3u8Url ? (
-        <HlsPlayer m3u8Url={m3u8Url} onDetection={onDetection} isModalOpen={isModal} />
+        <HlsPlayer m3u8Url={m3u8Url} onDetection={onDetection} isModalOpen={isModal} posterUrl={posterUrl} />
       ) : (
         <div className="error-message">No valid m3u8 URL provided for Chaturbate.</div>
       );
