@@ -18,4 +18,6 @@ blinker
 selenium-wire 
 opencv-python
 gunicorn
+flask_login
+flask_caching
 

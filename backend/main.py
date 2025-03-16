@@ -34,6 +34,7 @@ with app.app_context():
         db.session.add(agent)
         db.session.commit()
 
+
 # Start background tasks.
 start_notification_monitor()
 start_chat_cleanup_thread()
